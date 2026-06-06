@@ -142,8 +142,9 @@ export default async function handler(req, res) {
       const cuando = fecha===HOY()?"hoy":dispCorto(fecha);
 
       // Aviso cruzado al otro socio
+     // Aviso cruzado al otro socio
       if (otroNum) {
-        avisar(otroNum, `📥 ${autor} registró:\n${tipoTxt} ${detalle}${obj.descripcion?` (${obj.descripcion})`:""} · ${cuando}`);
+        await avisar(otroNum, `📥 ${autor} registró:\n${tipoTxt} ${detalle}${obj.descripcion?` (${obj.descripcion})`:""} · ${cuando}`);
       }
 
       return res.status(200).send(twiml(`${tipoTxt} registrado: ${detalle}${obj.descripcion?` (${obj.descripcion})`:""} · ${cuando}`));
