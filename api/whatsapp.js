@@ -44,12 +44,14 @@ async function avisar(aQuienNum, texto) {
     body.append("To", `whatsapp:${aQuienNum}`);
     body.append("From", BOT_NUM);
     body.append("Body", texto);
-    await fetch(`https://api.twilio.com/2010-04-01/Accounts/${sid}/Messages.json`, {
+   const tw = await fetch(`https://api.twilio.com/2010-04-01/Accounts/${sid}/Messages.json`, {
       method:"POST",
       headers:{ "Authorization":"Basic "+Buffer.from(`${sid}:${token}`).toString("base64"), "Content-Type":"application/x-www-form-urlencoded" },
       body: body.toString()
     });
-  } catch {}
+    const twData = await tw.json();
+    console.log("TWILIO RESPUESTA →", tw.status, JSON.stringify(twData));
+  } catch(err) { console.log("TWILIO ERROR →", String(err)); }
 }
 
 async function clasificar(texto, cajas, cats) {
