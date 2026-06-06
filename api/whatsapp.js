@@ -37,7 +37,6 @@ function twiml(msg) {
 async function avisar(aQuienNum, texto) {
   const sid = process.env.TWILIO_ACCOUNT_SID;
   const token = process.env.TWILIO_AUTH_TOKEN;
-  console.log("AVISO DEBUG → destinatario:", aQuienNum, "| tiene SID:", !!sid, "| tiene token:", !!token);
   if (!sid || !token) return;
 try {
     const body = new URLSearchParams();
