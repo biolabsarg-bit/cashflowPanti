@@ -40,9 +40,9 @@ const THEMES = {
 };
 
 const TIPOS = {
-  ingreso:       { label:"Ingreso", color:"#27ae60", icon:"⬇️", signo:1 },
-  egreso:        { label:"Egreso",  color:"#e74c3c", icon:"⬆️", signo:-1 },
-  transferencia: { label:"Transfer.", color:"#2980b9", icon:"🔁", signo:0 },
+  ingreso:       { label:"Ingreso", color:"#27ae60", icon:"⬇️" },
+  egreso:        { label:"Egreso",  color:"#e74c3c", icon:"⬆️" },
+  transferencia: { label:"Transfer.", color:"#2980b9", icon:"🔁" },
 };
 
 function Login({ onOk, dark }) {
@@ -70,16 +70,13 @@ function Login({ onOk, dark }) {
   );
 }
 
-// Gráfico de barras ingresos vs egresos
 function BarrasMes({ meses, T }) {
   const e = React.createElement;
   const max = Math.max(...meses.flatMap(m=>[m.ing,m.egr]), 1);
   const W=320, H=150, pad=24, gw=(W-pad*2)/meses.length;
   return e("svg",{width:"100%",viewBox:`0 0 ${W} ${H+22}`,style:{display:"block",overflow:"visible"}},
     meses.map((m,i)=>{
-      const baseX = pad + i*gw;
-      const bw = gw*0.32;
-      const hi = (m.ing/max)*H, he = (m.egr/max)*H;
+      const baseX=pad+i*gw; const bw=gw*0.32; const hi=(m.ing/max)*H, he=(m.egr/max)*H;
       return e("g",{key:i},
         e("rect",{x:baseX+gw*0.12,y:H-hi,width:bw,height:hi,rx:3,fill:"#27ae60"}),
         e("rect",{x:baseX+gw*0.12+bw+3,y:H-he,width:bw,height:he,rx:3,fill:"#e74c3c"}),
@@ -89,16 +86,14 @@ function BarrasMes({ meses, T }) {
   );
 }
 
-// Torta (donut) de egresos por categoría
 function Torta({ data, total, T, hov, onHov }) {
   const e = React.createElement;
   const r=70, stroke=26, circ=2*Math.PI*r;
   let off=0;
-  const segs = data.map(d=>{ const dash=(d.monto/total)*circ; const s={...d,dash,gap:circ-dash,off}; off+=dash; return s; });
+  const segs=data.map(d=>{ const dash=(d.monto/total)*circ; const s={...d,dash,gap:circ-dash,off}; off+=dash; return s; });
   return e("svg",{width:190,height:190,viewBox:"0 0 190 190",style:{display:"block",margin:"0 auto",overflow:"visible"}},
     e("circle",{cx:95,cy:95,r,fill:"none",stroke:T.bg2,strokeWidth:stroke}),
-    ...segs.map((s,i)=>{
-      const isH=hov===i;
+    ...segs.map((s,i)=>{ const isH=hov===i;
       return e("circle",{key:i,cx:95,cy:95,r,fill:"none",stroke:s.color,strokeWidth:isH?stroke+5:stroke,strokeDasharray:`${s.dash} ${s.gap}`,strokeDashoffset:-s.off+circ/4,style:{transition:"all .2s",cursor:"pointer",transformOrigin:"95px 95px"},onMouseEnter:()=>onHov(i),onMouseLeave:()=>onHov(null)});
     }),
     e("text",{x:95,y:90,textAnchor:"middle",style:{fontSize:11,fill:T.text2,fontFamily:"sans-serif"}}, hov!==null?data[hov].nombre:"Egresos"),
@@ -115,6 +110,7 @@ function App() {
   const [cajas, setCajas] = useState([]);
   const [cats, setCats] = useState([]);
   const [movs, setMovs] = useState([]);
+  const [fijos, setFijos] = useState([]);
   const [syncing, setSyncing] = useState(true);
   const [view, setView] = useState("inicio");
   const [dolar, setDolar] = useState(null);
@@ -130,12 +126,18 @@ function App() {
   const [fCaja, setFCaja] = useState("");
   const [fAutor, setFAutor] = useState("");
   const [fTipo, setFTipo] = useState("");
+  const [fDesde, setFDesde] = useState("");
+  const [fHasta, setFHasta] = useState("");
+  const [busca, setBusca] = useState("");
 
   const [nuevaCaja, setNuevaCaja] = useState({nombre:"",moneda:"ARS"});
   const [nuevaCat, setNuevaCat] = useState({nombre:"",tipo:"ambos"});
+  const [nuevoFijo, setNuevoFijo] = useState({nombre:"",tipo:"egreso",monto:"",caja_id:"",categoria_id:""});
+  const [fijoMontos, setFijoMontos] = useState({});
   const [confirmDel, setConfirmDel] = useState(null);
   const [confirmCajaDel, setConfirmCajaDel] = useState(null);
   const [confirmCatDel, setConfirmCatDel] = useState(null);
+  const [confirmFijoDel, setConfirmFijoDel] = useState(null);
   const [editMov, setEditMov] = useState(null);
   const [hovTorta, setHovTorta] = useState(null);
 
@@ -143,12 +145,13 @@ function App() {
 
   const cargar = useCallback(async()=>{
     try {
-      const [c, ca, m] = await Promise.all([
+      const [c, ca, m, f] = await Promise.all([
         sbGet("cajas","select=*&order=orden.asc,id.asc"),
         sbGet("categorias","select=*&order=id.asc"),
         sbGet("movimientos","select=*&order=fecha.desc,creado_en.desc"),
+        sbGet("fijos","select=*&order=id.asc"),
       ]);
-      setCajas(c); setCats(ca); setMovs(m);
+      setCajas(c); setCats(ca); setMovs(m); setFijos(f);
     } catch {}
     setSyncing(false);
   },[]);
@@ -170,25 +173,18 @@ function App() {
     return s;
   }
 
-  // Patrimonio total consolidado en ARS (USD convertido por blue venta)
   const blueVenta = dolar ? Number(dolar.venta) : null;
-  let patrimonio = 0, hayUSDsinDolar=false;
-  cajas.forEach(c=>{
-    const s = saldoCaja(c.id);
-    if(c.moneda==="USD"){ if(blueVenta) patrimonio += s*blueVenta; else hayUSDsinDolar=true; }
-    else patrimonio += s;
-  });
+  let patrimonio=0, hayUSDsinDolar=false;
+  cajas.forEach(c=>{ const s=saldoCaja(c.id); if(c.moneda==="USD"){ if(blueVenta) patrimonio+=s*blueVenta; else hayUSDsinDolar=true; } else patrimonio+=s; });
 
   async function guardarMov(){
-    const m=parseFloat(monto);
-    if(!m||m<=0||!cajaId) return;
+    const m=parseFloat(monto); if(!m||m<=0||!cajaId) return;
     if(tipo==="transferencia"&&(!cajaDest||cajaDest===cajaId)) return;
     const obj={ id:Date.now(), tipo, monto:m, caja_id:Number(cajaId), caja_destino_id:tipo==="transferencia"?Number(cajaDest):null, categoria_id:catId?Number(catId):null, descripcion:descr||(tipo==="transferencia"?"Transferencia":""), fecha, autor:usuario, creado_en:new Date().toISOString() };
     try { const g=await sbPost("movimientos",obj); setMovs(prev=>[g,...prev]); setMonto("");setDescr("");setCatId("");setCajaDest(""); setView("movimientos"); } catch {}
   }
   async function guardarEdit(){
-    const m=parseFloat(editMov.monto);
-    if(!m||m<=0) return;
+    const m=parseFloat(editMov.monto); if(!m||m<=0) return;
     const cambios={ monto:m, caja_id:Number(editMov.caja_id), categoria_id:editMov.categoria_id?Number(editMov.categoria_id):null, descripcion:editMov.descripcion, fecha:editMov.fecha };
     setMovs(prev=>prev.map(x=>x.id===editMov.id?{...x,...cambios}:x)); setEditMov(null);
     try{ await sbPatch("movimientos",editMov.id,cambios); }catch{}
@@ -208,18 +204,52 @@ function App() {
     try { const g=await sbPost("categorias",obj); setCats(prev=>[...prev,g]); setNuevaCat({nombre:"",tipo:"ambos"}); } catch {}
   }
   async function borrarCat(id){ setCats(prev=>prev.filter(x=>x.id!==id)); setConfirmCatDel(null); try{ await sbDel("categorias",id); }catch{} }
+  async function agregarFijo(){
+    const nombre=nuevoFijo.nombre.trim(); const m=parseFloat(nuevoFijo.monto);
+    if(!nombre||!m||m<=0||!nuevoFijo.caja_id) return;
+    const obj={ id:Date.now(), nombre, tipo:nuevoFijo.tipo, monto_base:m, caja_id:Number(nuevoFijo.caja_id), categoria_id:nuevoFijo.categoria_id?Number(nuevoFijo.categoria_id):null };
+    try { const g=await sbPost("fijos",obj); setFijos(prev=>[...prev,g]); setNuevoFijo({nombre:"",tipo:"egreso",monto:"",caja_id:"",categoria_id:""}); } catch {}
+  }
+  async function borrarFijo(id){ setFijos(prev=>prev.filter(x=>x.id!==id)); setConfirmFijoDel(null); try{ await sbDel("fijos",id); }catch{} }
+  async function registrarFijo(f){
+    const me=fijoMontos[f.id];
+    const m = me!==undefined&&me!=="" ? parseFloat(me) : Number(f.monto_base);
+    if(!m||m<=0) return;
+    const obj={ id:Date.now(), tipo:f.tipo, monto:m, caja_id:f.caja_id, caja_destino_id:null, categoria_id:f.categoria_id, descripcion:f.nombre, fecha:today(), autor:usuario, creado_en:new Date().toISOString() };
+    try { const g=await sbPost("movimientos",obj); setMovs(prev=>[g,...prev]); setFijoMontos(prev=>{const c={...prev};delete c[f.id];return c;}); setView("movimientos"); } catch {}
+  }
   function cerrarSesion(){ try{ localStorage.removeItem("cf_auth"); localStorage.removeItem("cf_user"); }catch{} setAuth(false); }
   function cambiarUsuario(){ try{ localStorage.removeItem("cf_user"); }catch{} setAuth(false); }
 
   const cajaById = id => cajas.find(c=>c.id===id);
   const catById = id => cats.find(c=>c.id===id);
 
+  // Filtros aplicados (incluye fecha y búsqueda)
   const movsFil = movs.filter(m=>{
     if(fCaja && m.caja_id!==Number(fCaja) && m.caja_destino_id!==Number(fCaja)) return false;
     if(fAutor && m.autor!==fAutor) return false;
     if(fTipo && m.tipo!==fTipo) return false;
+    if(fDesde && m.fecha<fDesde) return false;
+    if(fHasta && m.fecha>fHasta) return false;
+    if(busca && !(m.descripcion||"").toLowerCase().includes(busca.toLowerCase())) return false;
     return true;
   });
+  const hayFiltro = fCaja||fAutor||fTipo||fDesde||fHasta||busca;
+
+  // Exportar CSV
+  function exportarCSV(){
+    const headers = ["Fecha","Hora","Tipo","Monto","Moneda","Caja","CajaDestino","Categoria","Descripcion","Autor"];
+    const filas = movsFil.map(m=>{
+      const cj=cajaById(m.caja_id), cjD=cajaById(m.caja_destino_id), ct=catById(m.categoria_id);
+      return [ m.fecha, horaDe(m.creado_en), TIPOS[m.tipo]?.label||m.tipo, m.monto, cj?.moneda||"ARS", cj?.nombre||"", cjD?.nombre||"", ct?.nombre||"", (m.descripcion||"").replace(/"/g,'""'), m.autor||"" ];
+    });
+    const csv = [headers, ...filas].map(f=>f.map(c=>`"${c}"`).join(",")).join("\n");
+    const blob = new Blob(["\ufeff"+csv], {type:"text/csv;charset=utf-8;"});
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href=url; a.download=`cashflow_${today()}.csv`; a.click();
+    URL.revokeObjectURL(url);
+  }
 
   const mesKey = today().slice(0,7);
   const movsMes = movs.filter(m=>String(m.fecha).slice(0,7)===mesKey);
@@ -227,7 +257,7 @@ function App() {
   const egresosMes = movsMes.filter(m=>m.tipo==="egreso").reduce((s,m)=>s+Number(m.monto),0);
   const netoMes = ingresosMes - egresosMes;
 
-  // Datos análisis: 6 meses ingresos vs egresos
+  // Análisis: usa rango de fechas si está, sino últimos 6 meses
   const meses6 = [];
   const ref = new Date();
   for(let i=5;i>=0;i--){
@@ -238,22 +268,19 @@ function App() {
     meses6.push({label:MESES[d.getMonth()],ing,egr});
   }
 
-  // Torta egresos por categoría (mes actual)
+  // Torta: respeta filtro de fechas si hay, sino mes actual
+  const movsTorta = (fDesde||fHasta) ? movsFil : movsMes;
   const egrPorCat = {};
-  movsMes.filter(m=>m.tipo==="egreso").forEach(m=>{
-    const k=m.categoria_id||"sin";
-    egrPorCat[k]=(egrPorCat[k]||0)+Number(m.monto);
-  });
-  const tortaData = Object.entries(egrPorCat).map(([k,monto])=>{
-    const cat = k==="sin"?null:catById(Number(k));
-    return { nombre:cat?cat.nombre:"Sin categoría", color:cat?cat.color:"#999", monto };
-  }).sort((a,b)=>b.monto-a.monto);
+  movsTorta.filter(m=>m.tipo==="egreso").forEach(m=>{ const k=m.categoria_id||"sin"; egrPorCat[k]=(egrPorCat[k]||0)+Number(m.monto); });
+  const tortaData = Object.entries(egrPorCat).map(([k,monto])=>{ const cat=k==="sin"?null:catById(Number(k)); return { nombre:cat?cat.nombre:"Sin categoría", color:cat?cat.color:"#999", monto }; }).sort((a,b)=>b.monto-a.monto);
   const tortaTotal = tortaData.reduce((s,d)=>s+d.monto,0);
+
+  const totalFijos = fijos.reduce((s,f)=>{ const me=fijoMontos[f.id]; const m=me!==undefined&&me!==""?parseFloat(me)||0:Number(f.monto_base); return s+(f.tipo==="egreso"?m:0); },0);
 
   const css=`
     *{box-sizing:border-box;margin:0;padding:0}
     body{background:${T.bg};overscroll-behavior:none}
-    .tab{flex:1;padding:11px 2px;background:none;border:none;border-bottom:2.5px solid transparent;cursor:pointer;font-size:11px;color:${T.text2};transition:all .2s}
+    .tab{flex:1;padding:11px 1px;background:none;border:none;border-bottom:2.5px solid transparent;cursor:pointer;font-size:10.5px;color:${T.text2};transition:all .2s}
     .tab:hover{background:${T.bg2}}
     .inp{font-size:14px;border:0.5px solid ${T.border2};border-radius:10px;padding:10px 12px;background:${T.inputBg};color:${T.text};outline:none;width:100%}
     .inp:focus{border-color:#2980b9}
@@ -271,13 +298,15 @@ function App() {
     .modal{background:${T.card};border-radius:18px;padding:20px;width:100%;max-width:380px;border:0.5px solid ${T.border}}
     .lbl{font-size:11px;color:${T.text2};margin:0 0 4px;font-weight:600;text-transform:uppercase;letter-spacing:.03em}
     .leg{display:flex;align-items:center;gap:7px;padding:3px 0;font-size:12px}
+    .mini{font-size:12px;border:0.5px solid ${T.border2};border-radius:8px;padding:6px 8px;background:${T.inputBg};color:${T.text};outline:none}
+    .clearf{font-size:11px;padding:4px 10px;border-radius:16px;border:0.5px solid ${T.border2};background:none;color:${T.text2};cursor:pointer}
   `;
 
   const Header = e("div",{style:{borderBottom:`0.5px solid ${T.border}`}},
     e("div",{style:{padding:"13px 18px 0",display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:10}},
       e("div",null,
         e("p",{style:{margin:0,fontSize:17,fontWeight:600,color:T.text}},"🏢 Cashflow",syncing?e("span",{style:{fontSize:11,color:T.text2,marginLeft:8,fontWeight:400}},"sync..."):null),
-        e("p",{style:{margin:0,fontSize:11.5,color:T.text2,marginTop:2}},`Sos: ${usuario} · ${movs.length} movimientos`)
+        e("p",{style:{margin:0,fontSize:11.5,color:T.text2,marginTop:2}},`Sos: ${usuario} · ${movs.length} movim.`)
       ),
       e("div",{style:{display:"flex",alignItems:"center",gap:7}},
         e("button",{className:"icon-btn",onClick:cambiarUsuario,title:"Cambiar usuario"},"👤"),
@@ -286,14 +315,13 @@ function App() {
       )
     ),
     e("div",{style:{display:"flex"}},
-      [["inicio","🏠 Inicio","#27ae60"],["nuevo","➕ Cargar","#2980b9"],["movimientos","📋 Movim.","#8e44ad"],["analisis","📊 Análisis","#16a085"],["config","⚙️ Config","#d68910"]].map(([k,l,c])=>
+      [["inicio","🏠 Inicio","#27ae60"],["nuevo","➕ Cargar","#2980b9"],["movimientos","📋 Movim.","#8e44ad"],["fijos","🔁 Fijos","#c0392b"],["analisis","📊 Análisis","#16a085"],["config","⚙️ Config","#d68910"]].map(([k,l,c])=>
         e("button",{key:k,className:"tab",style:{borderBottomColor:view===k?c:"transparent",color:view===k?c:T.text2,fontWeight:view===k?700:400},onClick:()=>setView(k)},l)
       )
     )
   );
 
   const Inicio = e("div",{style:{flex:1,overflowY:"auto",padding:"14px 16px",display:"flex",flexDirection:"column",gap:12}},
-    // Patrimonio total consolidado
     e("div",{className:"card",style:{background:"linear-gradient(135deg,#27ae60,#2980b9)",border:"none",textAlign:"center",padding:"18px"}},
       e("p",{style:{margin:0,fontSize:12,color:"rgba(255,255,255,.85)"}},"Patrimonio total (consolidado)"),
       e("p",{style:{margin:"4px 0 0",fontSize:28,fontWeight:700,color:"#fff"}},fmt(patrimonio)),
@@ -310,8 +338,7 @@ function App() {
     ),
     e("p",{style:{margin:"4px 0 -4px",fontSize:13,fontWeight:600,color:T.text}},"Cajas"),
     cajas.length===0 && e("p",{style:{color:T.text2,fontSize:14,textAlign:"center",padding:"20px 0"}},syncing?"Cargando...":"Creá tu primera caja en ⚙️ Config"),
-    cajas.map(c=>{
-      const s=saldoCaja(c.id);
+    cajas.map(c=>{ const s=saldoCaja(c.id);
       return e("div",{key:c.id,className:"card",style:{borderLeft:`3px solid ${c.color}`,display:"flex",alignItems:"center",gap:12}},
         e("div",{style:{width:42,height:42,borderRadius:12,background:c.color+"22",display:"flex",alignItems:"center",justifyContent:"center",fontSize:21}},c.icon),
         e("div",{style:{flex:1}}, e("p",{style:{margin:0,fontSize:15,fontWeight:600,color:T.text}},c.nombre), e("p",{style:{margin:0,fontSize:11,color:T.text2}}, c.moneda + (c.moneda==="USD"&&blueVenta?` · ≈ ${fmt(s*blueVenta)}`:""))),
@@ -340,10 +367,22 @@ function App() {
   );
 
   const Movimientos = e("div",{style:{display:"flex",flexDirection:"column",flex:1,overflow:"hidden"}},
-    e("div",{style:{display:"flex",gap:7,padding:"10px 16px",borderBottom:`0.5px solid ${T.border}`,flexWrap:"wrap",background:T.bg2}},
-      e("select",{className:"inp",style:{flex:1,fontSize:12,padding:"6px 8px"},value:fTipo,onChange:ev=>setFTipo(ev.target.value)}, e("option",{value:""},"Todo tipo"), Object.entries(TIPOS).map(([k,v])=>e("option",{key:k,value:k},v.label))),
-      e("select",{className:"inp",style:{flex:1,fontSize:12,padding:"6px 8px"},value:fCaja,onChange:ev=>setFCaja(ev.target.value)}, e("option",{value:""},"Toda caja"), cajas.map(c=>e("option",{key:c.id,value:c.id},c.nombre))),
-      e("select",{className:"inp",style:{flex:1,fontSize:12,padding:"6px 8px"},value:fAutor,onChange:ev=>setFAutor(ev.target.value)}, e("option",{value:""},"Todos"), USUARIOS.map(u=>e("option",{key:u,value:u},u)))
+    e("div",{style:{padding:"10px 16px",borderBottom:`0.5px solid ${T.border}`,background:T.bg2,display:"flex",flexDirection:"column",gap:7}},
+      e("input",{className:"mini",style:{width:"100%"},value:busca,onChange:ev=>setBusca(ev.target.value),placeholder:"🔍 Buscar por descripción..."}),
+      e("div",{style:{display:"flex",gap:6,flexWrap:"wrap"}},
+        e("select",{className:"mini",style:{flex:1},value:fTipo,onChange:ev=>setFTipo(ev.target.value)}, e("option",{value:""},"Tipo"), Object.entries(TIPOS).map(([k,v])=>e("option",{key:k,value:k},v.label))),
+        e("select",{className:"mini",style:{flex:1},value:fCaja,onChange:ev=>setFCaja(ev.target.value)}, e("option",{value:""},"Caja"), cajas.map(c=>e("option",{key:c.id,value:c.id},c.nombre))),
+        e("select",{className:"mini",style:{flex:1},value:fAutor,onChange:ev=>setFAutor(ev.target.value)}, e("option",{value:""},"Autor"), USUARIOS.map(u=>e("option",{key:u,value:u},u)))
+      ),
+      e("div",{style:{display:"flex",gap:6,alignItems:"center",flexWrap:"wrap"}},
+        e("span",{style:{fontSize:11,color:T.text2}},"Desde"), e("input",{type:"date",className:"mini",value:fDesde,onChange:ev=>setFDesde(ev.target.value)}),
+        e("span",{style:{fontSize:11,color:T.text2}},"Hasta"), e("input",{type:"date",className:"mini",value:fHasta,onChange:ev=>setFHasta(ev.target.value)}),
+        hayFiltro && e("button",{className:"clearf",onClick:()=>{setFCaja("");setFAutor("");setFTipo("");setFDesde("");setFHasta("");setBusca("");}},"Limpiar")
+      ),
+      e("div",{style:{display:"flex",justifyContent:"space-between",alignItems:"center"}},
+        e("span",{style:{fontSize:11,color:T.text2}},`${movsFil.length} resultado${movsFil.length!==1?"s":""}`),
+        e("button",{className:"clearf",style:{color:"#16a085",borderColor:"#16a085"},onClick:exportarCSV},"⬇ Exportar CSV")
+      )
     ),
     e("div",{style:{flex:1,overflowY:"auto",padding:"12px 16px",display:"flex",flexDirection:"column",gap:7}},
       movsFil.length===0 && e("p",{style:{color:T.text2,textAlign:"center",marginTop:40,fontSize:14}},syncing?"Cargando...":"No hay movimientos."),
@@ -361,14 +400,51 @@ function App() {
               e("p",{style:{margin:0,fontSize:15,fontWeight:700,color:tp.color}},`${m.tipo==="ingreso"?"+":m.tipo==="egreso"?"−":""}${fmt(m.monto,cj?.moneda)}`),
               e("div",{style:{display:"flex",gap:6,marginTop:3,justifyContent:"flex-end"}},
                 m.tipo!=="transferencia" && e("button",{className:"edit-btn",onClick:()=>setEditMov({id:m.id,monto:String(m.monto),caja_id:m.caja_id,categoria_id:m.categoria_id||"",descripcion:m.descripcion||"",fecha:m.fecha})},"✏️"),
-                confirmDel===m.id
-                  ? e("span",{style:{display:"flex",gap:4}}, e("button",{className:"conf-yes",onClick:()=>borrarMov(m.id)},"Sí"), e("button",{className:"conf-no",onClick:()=>setConfirmDel(null)},"No"))
-                  : e("button",{className:"del-btn",onClick:()=>setConfirmDel(m.id)},"✕")
+                confirmDel===m.id ? e("span",{style:{display:"flex",gap:4}}, e("button",{className:"conf-yes",onClick:()=>borrarMov(m.id)},"Sí"), e("button",{className:"conf-no",onClick:()=>setConfirmDel(null)},"No")) : e("button",{className:"del-btn",onClick:()=>setConfirmDel(m.id)},"✕")
               )
             )
           )
         );
       })
+    )
+  );
+
+  const Fijos = e("div",{style:{flex:1,overflowY:"auto",padding:"14px 16px",display:"flex",flexDirection:"column",gap:10}},
+    e("p",{style:{margin:"0 0 2px",fontSize:13,color:T.text2,lineHeight:1.5}},"Movimientos recurrentes. Registralos cada período con un toque, ajustando el monto si cambió."),
+    fijos.length>0 && e("div",{className:"card",style:{display:"flex",justifyContent:"space-between",alignItems:"center",background:"linear-gradient(135deg,#c0392b22,#e74c3c22)"}},
+      e("span",{style:{fontSize:12,color:T.text2}},"Total egresos fijos"), e("span",{style:{fontSize:16,fontWeight:600,color:"#c0392b"}},fmt(totalFijos))
+    ),
+    fijos.map(f=>{
+      const tp=TIPOS[f.tipo]; const cj=cajaById(f.caja_id); const ct=catById(f.categoria_id);
+      const mv=fijoMontos[f.id]!==undefined?fijoMontos[f.id]:String(f.monto_base);
+      return e("div",{key:f.id,className:"card",style:{borderLeft:`3px solid ${tp.color}`}},
+        e("div",{style:{display:"flex",alignItems:"center",gap:10,marginBottom:10}},
+          e("span",{style:{fontSize:18}},tp.icon),
+          e("div",{style:{flex:1,minWidth:0}},
+            e("p",{style:{margin:0,fontSize:15,fontWeight:600,color:T.text}},f.nombre),
+            e("p",{style:{margin:0,fontSize:11,color:T.text2}},`${tp.label} · ${cj?.nombre||"?"}${ct?` · ${ct.nombre}`:""} · base ${fmt(f.monto_base)}`)
+          ),
+          confirmFijoDel===f.id ? e("div",{style:{display:"flex",gap:4}}, e("button",{className:"conf-yes",onClick:()=>borrarFijo(f.id)},"Sí"), e("button",{className:"conf-no",onClick:()=>setConfirmFijoDel(null)},"No")) : e("button",{className:"del-btn",onClick:()=>setConfirmFijoDel(f.id)},"✕")
+        ),
+        e("div",{style:{display:"flex",gap:8}},
+          e("input",{type:"number",className:"inp",style:{flex:1},value:mv,onChange:ev=>setFijoMontos(prev=>({...prev,[f.id]:ev.target.value})),placeholder:"Monto"}),
+          e("button",{className:"btn",style:{background:tp.color,color:"#fff"},onClick:()=>registrarFijo(f)},"Registrar")
+        )
+      );
+    }),
+    fijos.length===0 && !syncing && e("p",{style:{color:T.text2,textAlign:"center",margin:"16px 0",fontSize:14}},"Todavía no hay movimientos fijos."),
+    e("div",{style:{background:T.bg2,border:`0.5px dashed ${T.border2}`,borderRadius:14,padding:14,marginTop:4}},
+      e("p",{style:{margin:"0 0 10px",fontSize:13,fontWeight:600,color:T.text}},"➕ Nuevo fijo"),
+      e("input",{className:"inp",style:{marginBottom:8},value:nuevoFijo.nombre,onChange:ev=>setNuevoFijo({...nuevoFijo,nombre:ev.target.value}),placeholder:"Nombre (ej: Alquiler)"}),
+      e("div",{style:{display:"flex",gap:8,marginBottom:8}},
+        e("select",{className:"inp",style:{flex:1},value:nuevoFijo.tipo,onChange:ev=>setNuevoFijo({...nuevoFijo,tipo:ev.target.value})}, e("option",{value:"egreso"},"Egreso"), e("option",{value:"ingreso"},"Ingreso")),
+        e("input",{type:"number",className:"inp",style:{flex:1},value:nuevoFijo.monto,onChange:ev=>setNuevoFijo({...nuevoFijo,monto:ev.target.value}),placeholder:"Monto base"})
+      ),
+      e("div",{style:{display:"flex",gap:8,marginBottom:10}},
+        e("select",{className:"inp",style:{flex:1},value:nuevoFijo.caja_id,onChange:ev=>setNuevoFijo({...nuevoFijo,caja_id:ev.target.value})}, e("option",{value:""},"Caja..."), cajas.map(c=>e("option",{key:c.id,value:c.id},`${c.icon} ${c.nombre}`))),
+        e("select",{className:"inp",style:{flex:1},value:nuevoFijo.categoria_id,onChange:ev=>setNuevoFijo({...nuevoFijo,categoria_id:ev.target.value})}, e("option",{value:""},"Categoría..."), cats.map(c=>e("option",{key:c.id,value:c.id},`${c.icon} ${c.nombre}`)))
+      ),
+      e("button",{className:"btn",style:{background:"#c0392b",color:"#fff",width:"100%"},onClick:agregarFijo},"Agregar fijo")
     )
   );
 
@@ -382,11 +458,10 @@ function App() {
       )
     ),
     tortaData.length>0 && e("div",{className:"card"},
-      e("p",{style:{margin:"0 0 10px",fontSize:13,fontWeight:600,color:T.text}},"🍰 Egresos por categoría (este mes)"),
+      e("p",{style:{margin:"0 0 10px",fontSize:13,fontWeight:600,color:T.text}},(fDesde||fHasta)?"🍰 Egresos por categoría (período filtrado)":"🍰 Egresos por categoría (este mes)"),
       e(Torta,{data:tortaData,total:tortaTotal,T,hov:hovTorta,onHov:setHovTorta}),
       e("div",{style:{marginTop:14}},
-        tortaData.map((d,i)=>{
-          const pct=tortaTotal>0?Math.round(d.monto/tortaTotal*100):0;
+        tortaData.map((d,i)=>{ const pct=tortaTotal>0?Math.round(d.monto/tortaTotal*100):0;
           return e("div",{key:i,className:"leg",style:{justifyContent:"space-between",background:hovTorta===i?T.bg2:"transparent",borderRadius:8,padding:"3px 6px",cursor:"pointer"},onMouseEnter:()=>setHovTorta(i),onMouseLeave:()=>setHovTorta(null)},
             e("span",{style:{display:"flex",alignItems:"center",gap:7,color:T.text}}, e("span",{style:{width:10,height:10,borderRadius:"50%",background:d.color}}), d.nombre),
             e("span",{style:{color:T.text2}},`${fmt(d.monto)} · ${pct}%`)
@@ -394,7 +469,7 @@ function App() {
         })
       )
     ),
-    tortaData.length===0 && e("p",{style:{color:T.text2,textAlign:"center",marginTop:30,fontSize:14}},"Sin egresos este mes para graficar.")
+    tortaData.length===0 && e("p",{style:{color:T.text2,textAlign:"center",marginTop:30,fontSize:14}},"Sin egresos para graficar en el período.")
   );
 
   const Config = e("div",{style:{flex:1,overflowY:"auto",padding:"14px 16px",display:"flex",flexDirection:"column",gap:16}},
@@ -456,6 +531,7 @@ function App() {
     view==="inicio" && Inicio,
     view==="nuevo" && Nuevo,
     view==="movimientos" && Movimientos,
+    view==="fijos" && Fijos,
     view==="analisis" && Analisis,
     view==="config" && Config
   );
