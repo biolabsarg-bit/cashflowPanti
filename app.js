@@ -145,6 +145,7 @@ function App() {
   const [nuevoCobro, setNuevoCobro] = useState({quien:"",monto:"",descripcion:"",fecha:today()});
   const [confirmCobroDel, setConfirmCobroDel] = useState(null);
   const [cobrarCaja, setCobrarCaja] = useState({});
+  const [nuevoRetiro, setNuevoRetiro] = useState({monto:"",caja_id:"",descr:""});
   const [colMeses, setColMeses] = useState({});
   const [colDias, setColDias] = useState({});
 
@@ -241,6 +242,11 @@ function App() {
     setCobrar(prev=>prev.map(y=>y.id===x.id?{...y,cobrado:true}:y));
     setCobrarCaja(prev=>{ const c={...prev}; delete c[x.id]; return c; });
     try{ await sbPatch("cobrar",x.id,{cobrado:true}); }catch{}
+  }
+  async function agregarRetiro(){
+    const m=parseFloat(nuevoRetiro.monto); if(!m||m<=0||!nuevoRetiro.caja_id) return;
+    const obj={ id:Date.now(), tipo:"egreso", monto:m, caja_id:Number(nuevoRetiro.caja_id), caja_destino_id:null, categoria_id:null, descripcion:nuevoRetiro.descr||"Retiro", fecha:today(), autor:usuario, es_retiro:true, creado_en:new Date().toISOString() };
+    try { const g=await sbPost("movimientos",obj); setMovs(prev=>[g,...prev]); setNuevoRetiro({monto:"",caja_id:"",descr:""}); } catch {}
   }
   function cerrarSesion(){ try{ localStorage.removeItem("cf_auth"); localStorage.removeItem("cf_user"); }catch{} setAuth(false); }
   function cambiarUsuario(){ try{ localStorage.removeItem("cf_user"); }catch{} setAuth(false); }
@@ -377,7 +383,7 @@ function App() {
   const css=`
     *{box-sizing:border-box;margin:0;padding:0}
     body{background:${T.bg};overscroll-behavior:none}
-    .tab{flex:1;padding:11px 1px;background:none;border:none;border-bottom:2.5px solid transparent;cursor:pointer;font-size:10.5px;color:${T.text2};transition:all .2s}
+    .tab{flex:1;min-width:fit-content;white-space:nowrap;padding:11px 7px;background:none;border:none;border-bottom:2.5px solid transparent;cursor:pointer;font-size:10.5px;color:${T.text2};transition:all .2s}
     .tab:hover{background:${T.bg2}}
     .inp{font-size:14px;border:0.5px solid ${T.border2};border-radius:10px;padding:10px 12px;background:${T.inputBg};color:${T.text};outline:none;width:100%}
     .inp:focus{border-color:#2980b9}
@@ -413,8 +419,8 @@ function App() {
         e("button",{className:"icon-btn",onClick:cerrarSesion,title:"Salir"},"⏻")
       )
     ),
-    e("div",{style:{display:"flex"}},
-      [["inicio","🏠 Inicio","#27ae60"],["nuevo","➕ Cargar","#2980b9"],["movimientos","📋 Movim.","#8e44ad"],["cobrar","💰 Cobrar","#d68910"],["fijos","🔁 Fijos","#c0392b"],["analisis","📊 Análisis","#16a085"],["config","⚙️ Config","#7f8c8d"]].map(([k,l,c])=>
+    e("div",{style:{display:"flex",overflowX:"auto"}},
+      [["inicio","🏠 Inicio","#27ae60"],["nuevo","➕ Cargar","#2980b9"],["movimientos","📋 Movim.","#8e44ad"],["cobrar","💰 Cobrar","#d68910"],["retiros","↩️ Retiros","#16a085"],["fijos","🔁 Fijos","#c0392b"],["analisis","📊 Análisis","#2c3e50"],["config","⚙️ Config","#7f8c8d"]].map(([k,l,c])=>
         e("button",{key:k,className:"tab",style:{borderBottomColor:view===k?c:"transparent",color:view===k?c:T.text2,fontWeight:view===k?700:400},onClick:()=>setView(k)},l)
       )
     )
@@ -441,7 +447,7 @@ function App() {
         e("p",{style:{margin:"4px 0 0",fontSize:16,fontWeight:600,color:"#d68910"}},fmt(totalCobrar)),
         e("p",{style:{margin:"2px 0 0",fontSize:10.5,color:T.text2}},`${cobrarPend.length} pendiente${cobrarPend.length!==1?"s":""}`)
       ),
-      e("div",{className:"card",style:{flex:1,borderLeft:"3px solid #16a085"}},
+      e("div",{className:"card",style:{flex:1,cursor:"pointer",borderLeft:"3px solid #16a085"},onClick:()=>setView("retiros")},
         e("p",{style:{margin:0,fontSize:11,color:T.text2}},"↩️ Retiros socios"),
         ...USUARIOS.map(u=>e("p",{key:u,style:{margin:"3px 0 0",fontSize:11.5,color:T.text,display:"flex",justifyContent:"space-between"}}, e("span",null,u), e("span",{style:{fontWeight:600}},fmt(retiros[u]||0)))),
         difRet>0 && e("p",{style:{margin:"4px 0 0",fontSize:10,color:"#16a085",fontWeight:600}},`${aFavor} +${fmt(difRet)} a favor`)
@@ -648,6 +654,40 @@ function App() {
     )
   );
 
+  const retirosList = movs.filter(m=>m.es_retiro);
+  const Retiros = e("div",{style:{flex:1,overflowY:"auto",padding:"14px 16px",display:"flex",flexDirection:"column",gap:12}},
+    e("p",{style:{margin:"0 0 2px",fontSize:13,color:T.text2,lineHeight:1.5}},"Retiros de socios: plata que cada uno saca de la empresa. El que retiró menos queda con saldo a favor para igualar."),
+    e("div",{className:"card",style:{background:"linear-gradient(135deg,#16a085,#2c3e50)",border:"none",padding:"16px"}},
+      ...USUARIOS.map(u=>e("div",{key:u,style:{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"3px 0"}},
+        e("span",{style:{fontSize:14,color:"rgba(255,255,255,.9)"}},`↩️ ${u}`),
+        e("span",{style:{fontSize:17,fontWeight:700,color:"#fff"}},fmt(retiros[u]||0))
+      )),
+      difRet>0
+        ? e("p",{style:{margin:"8px 0 0",fontSize:12.5,color:"#fff",fontWeight:600,borderTop:"1px solid rgba(255,255,255,.25)",paddingTop:8}},`✅ ${aFavor} tiene ${fmt(difRet)} a favor para igualar.`)
+        : (hayRetiros?e("p",{style:{margin:"8px 0 0",fontSize:12.5,color:"rgba(255,255,255,.9)",borderTop:"1px solid rgba(255,255,255,.25)",paddingTop:8}},"⚖️ Retiros igualados."):null)
+    ),
+    e("div",{style:{background:T.bg2,border:`0.5px dashed ${T.border2}`,borderRadius:14,padding:14}},
+      e("p",{style:{margin:"0 0 10px",fontSize:13,fontWeight:600,color:T.text}},`➕ Registrar retiro (${usuario})`),
+      e("div",{style:{display:"flex",gap:8,marginBottom:8}},
+        e("input",{type:"number",className:"inp",style:{flex:1},value:nuevoRetiro.monto,onChange:ev=>setNuevoRetiro({...nuevoRetiro,monto:ev.target.value}),placeholder:"Monto"}),
+        e("select",{className:"inp",style:{flex:1},value:nuevoRetiro.caja_id,onChange:ev=>setNuevoRetiro({...nuevoRetiro,caja_id:ev.target.value})}, e("option",{value:""},"Caja..."), cajas.map(c=>e("option",{key:c.id,value:c.id},`${c.icon} ${c.nombre}`)))
+      ),
+      e("input",{className:"inp",style:{marginBottom:10},value:nuevoRetiro.descr,onChange:ev=>setNuevoRetiro({...nuevoRetiro,descr:ev.target.value}),placeholder:"Nota (opcional)"}),
+      e("button",{className:"btn",style:{background:"#16a085",color:"#fff",width:"100%"},onClick:agregarRetiro},"Registrar retiro")
+    ),
+    ...USUARIOS.map(u=>{
+      const items=retirosList.filter(m=>m.autor===u);
+      const tot=items.reduce((s,m)=>s+Number(m.monto),0);
+      return e("div",{key:u,style:{display:"flex",flexDirection:"column",gap:7}},
+        e("div",{className:"grphdr",style:{cursor:"default"}},
+          e("span",{style:{fontSize:13.5,fontWeight:700,color:T.text}},`↩️ ${u}`),
+          e("span",{style:{fontSize:13,fontWeight:700,color:"#16a085"}},fmt(tot))
+        ),
+        items.length>0 ? items.map(renderMov) : e("p",{style:{color:T.text2,fontSize:12.5,padding:"2px 4px"}},"Sin retiros.")
+      );
+    })
+  );
+
   const Modal = editMov && e("div",{className:"modal-bg",onClick:()=>setEditMov(null)},
     e("div",{className:"modal",onClick:ev=>ev.stopPropagation()},
       e("p",{style:{margin:"0 0 16px",fontSize:16,fontWeight:600,color:T.text}},"✏️ Editar movimiento"),
@@ -676,6 +716,7 @@ function App() {
     view==="nuevo" && Nuevo,
     view==="movimientos" && Movimientos,
     view==="cobrar" && Cobrar,
+    view==="retiros" && Retiros,
     view==="fijos" && Fijos,
     view==="analisis" && Analisis,
     view==="config" && Config
