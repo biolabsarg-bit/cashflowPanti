@@ -111,6 +111,7 @@ function App() {
   const [cats, setCats] = useState([]);
   const [movs, setMovs] = useState([]);
   const [fijos, setFijos] = useState([]);
+  const [cobrar, setCobrar] = useState([]);
   const [syncing, setSyncing] = useState(true);
   const [view, setView] = useState("inicio");
   const [dolar, setDolar] = useState(null);
@@ -122,6 +123,7 @@ function App() {
   const [catId, setCatId] = useState("");
   const [descr, setDescr] = useState("");
   const [fecha, setFecha] = useState(today());
+  const [esRetiro, setEsRetiro] = useState(false);
 
   const [fCaja, setFCaja] = useState("");
   const [fAutor, setFAutor] = useState("");
@@ -140,18 +142,24 @@ function App() {
   const [confirmFijoDel, setConfirmFijoDel] = useState(null);
   const [editMov, setEditMov] = useState(null);
   const [hovTorta, setHovTorta] = useState(null);
+  const [nuevoCobro, setNuevoCobro] = useState({quien:"",monto:"",descripcion:"",fecha:today()});
+  const [confirmCobroDel, setConfirmCobroDel] = useState(null);
+  const [cobrarCaja, setCobrarCaja] = useState({});
+  const [colMeses, setColMeses] = useState({});
+  const [colDias, setColDias] = useState({});
 
   useEffect(()=>{ try { localStorage.setItem("cf_tema", dark?"dark":"light"); } catch {} },[dark]);
 
   const cargar = useCallback(async()=>{
     try {
-      const [c, ca, m, f] = await Promise.all([
+      const [c, ca, m, f, co] = await Promise.all([
         sbGet("cajas","select=*&order=orden.asc,id.asc"),
         sbGet("categorias","select=*&order=id.asc"),
         sbGet("movimientos","select=*&order=fecha.desc,creado_en.desc"),
         sbGet("fijos","select=*&order=id.asc"),
+        sbGet("cobrar","select=*&order=fecha.desc,creado_en.desc"),
       ]);
-      setCajas(c); setCats(ca); setMovs(m); setFijos(f);
+      setCajas(c); setCats(ca); setMovs(m); setFijos(f); setCobrar(co);
     } catch {}
     setSyncing(false);
   },[]);
@@ -180,8 +188,8 @@ function App() {
   async function guardarMov(){
     const m=parseFloat(monto); if(!m||m<=0||!cajaId) return;
     if(tipo==="transferencia"&&(!cajaDest||cajaDest===cajaId)) return;
-    const obj={ id:Date.now(), tipo, monto:m, caja_id:Number(cajaId), caja_destino_id:tipo==="transferencia"?Number(cajaDest):null, categoria_id:catId?Number(catId):null, descripcion:descr||(tipo==="transferencia"?"Transferencia":""), fecha, autor:usuario, creado_en:new Date().toISOString() };
-    try { const g=await sbPost("movimientos",obj); setMovs(prev=>[g,...prev]); setMonto("");setDescr("");setCatId("");setCajaDest(""); setView("movimientos"); } catch {}
+    const obj={ id:Date.now(), tipo, monto:m, caja_id:Number(cajaId), caja_destino_id:tipo==="transferencia"?Number(cajaDest):null, categoria_id:catId?Number(catId):null, descripcion:descr||(tipo==="transferencia"?"Transferencia":""), fecha, autor:usuario, es_retiro: tipo==="egreso"?esRetiro:false, creado_en:new Date().toISOString() };
+    try { const g=await sbPost("movimientos",obj); setMovs(prev=>[g,...prev]); setMonto("");setDescr("");setCatId("");setCajaDest("");setEsRetiro(false); setView("movimientos"); } catch {}
   }
   async function guardarEdit(){
     const m=parseFloat(editMov.monto); if(!m||m<=0) return;
@@ -217,6 +225,22 @@ function App() {
     if(!m||m<=0) return;
     const obj={ id:Date.now(), tipo:f.tipo, monto:m, caja_id:f.caja_id, caja_destino_id:null, categoria_id:f.categoria_id, descripcion:f.nombre, fecha:today(), autor:usuario, creado_en:new Date().toISOString() };
     try { const g=await sbPost("movimientos",obj); setMovs(prev=>[g,...prev]); setFijoMontos(prev=>{const c={...prev};delete c[f.id];return c;}); setView("movimientos"); } catch {}
+  }
+  async function agregarCobro(){
+    const quien=nuevoCobro.quien.trim(); const m=parseFloat(nuevoCobro.monto);
+    if(!quien||!m||m<=0) return;
+    const obj={ id:Date.now(), quien, monto:m, descripcion:nuevoCobro.descripcion||"", fecha:nuevoCobro.fecha||today(), cobrado:false, autor:usuario, creado_en:new Date().toISOString() };
+    try { const g=await sbPost("cobrar",obj); setCobrar(prev=>[g,...prev]); setNuevoCobro({quien:"",monto:"",descripcion:"",fecha:today()}); } catch {}
+  }
+  async function borrarCobro(id){ setCobrar(prev=>prev.filter(x=>x.id!==id)); setConfirmCobroDel(null); try{ await sbDel("cobrar",id); }catch{} }
+  async function cobrarItem(x, cajaIdSel){
+    if(cajaIdSel){
+      const obj={ id:Date.now(), tipo:"ingreso", monto:Number(x.monto), caja_id:Number(cajaIdSel), caja_destino_id:null, categoria_id:null, descripcion:`Cobro: ${x.quien}${x.descripcion?" - "+x.descripcion:""}`, fecha:today(), autor:usuario, es_retiro:false, creado_en:new Date().toISOString() };
+      try { const g=await sbPost("movimientos",obj); setMovs(prev=>[g,...prev]); } catch {}
+    }
+    setCobrar(prev=>prev.map(y=>y.id===x.id?{...y,cobrado:true}:y));
+    setCobrarCaja(prev=>{ const c={...prev}; delete c[x.id]; return c; });
+    try{ await sbPatch("cobrar",x.id,{cobrado:true}); }catch{}
   }
   function cerrarSesion(){ try{ localStorage.removeItem("cf_auth"); localStorage.removeItem("cf_user"); }catch{} setAuth(false); }
   function cambiarUsuario(){ try{ localStorage.removeItem("cf_user"); }catch{} setAuth(false); }
@@ -277,6 +301,79 @@ function App() {
 
   const totalFijos = fijos.reduce((s,f)=>{ const me=fijoMontos[f.id]; const m=me!==undefined&&me!==""?parseFloat(me)||0:Number(f.monto_base); return s+(f.tipo==="egreso"?m:0); },0);
 
+  // ---- A cobrar ----
+  const cobrarPend = cobrar.filter(x=>!x.cobrado);
+  const cobrarHecho = cobrar.filter(x=>x.cobrado);
+  const totalCobrar = cobrarPend.reduce((s,x)=>s+Number(x.monto),0);
+
+  // ---- Retiros de socios ----
+  const retiros = {}; USUARIOS.forEach(u=>retiros[u]=0);
+  movs.filter(m=>m.es_retiro).forEach(m=>{ retiros[m.autor]=(retiros[m.autor]||0)+Number(m.monto); });
+  const hayRetiros = Object.values(retiros).some(v=>v>0);
+  const rA=retiros[USUARIOS[0]]||0, rB=retiros[USUARIOS[1]]||0;
+  const difRet = Math.abs(rA-rB);
+  const aFavor = rA<rB ? USUARIOS[0] : USUARIOS[1];
+
+  // ---- Agrupado de movimientos por mes -> día ----
+  const MES_LARGO=["Enero","Febrero","Marzo","Abril","Mayo","Junio","Julio","Agosto","Septiembre","Octubre","Noviembre","Diciembre"];
+  const DIA_SEM=["Dom","Lun","Mar","Mié","Jue","Vie","Sáb"];
+  const mesLabel = k=>{ const [y,m]=k.split("-"); return `${MES_LARGO[Number(m)-1]} ${y}`; };
+  const diaLabel = k=>{ const [y,m,d]=k.split("-"); const dd=new Date(Number(y),Number(m)-1,Number(d)); return `${DIA_SEM[dd.getDay()]} ${d}/${m}`; };
+  const gruposMov = [];
+  const _im={};
+  movsFil.forEach(m=>{
+    const mk=String(m.fecha).slice(0,7), dk=String(m.fecha).slice(0,10);
+    if(_im[mk]===undefined){ _im[mk]=gruposMov.length; gruposMov.push({mk,dias:[],_id:{},ing:0,egr:0,n:0}); }
+    const g=gruposMov[_im[mk]];
+    g.n++; if(m.tipo==="ingreso") g.ing+=Number(m.monto); else if(m.tipo==="egreso") g.egr+=Number(m.monto);
+    if(g._id[dk]===undefined){ g._id[dk]=g.dias.length; g.dias.push({dk,items:[]}); }
+    g.dias[g._id[dk]].items.push(m);
+  });
+
+  function renderMov(m){
+    const tp=TIPOS[m.tipo]||TIPOS.egreso; const cj=cajaById(m.caja_id); const cjD=cajaById(m.caja_destino_id); const ct=catById(m.categoria_id);
+    return e("div",{key:m.id,className:"card",style:{borderLeft:`3px solid ${tp.color}`,padding:"10px 13px"}},
+      e("div",{style:{display:"flex",alignItems:"flex-start",gap:10}},
+        e("span",{style:{fontSize:18}},tp.icon),
+        e("div",{style:{flex:1,minWidth:0}},
+          e("p",{style:{margin:0,fontSize:14,fontWeight:600,color:T.text}},m.descripcion||tp.label, m.es_retiro?e("span",{style:{fontSize:10,marginLeft:6,padding:"1px 6px",borderRadius:8,background:"#16a08522",color:"#16a085",fontWeight:600}},"↩️ retiro"):null),
+          e("p",{style:{margin:"2px 0 0",fontSize:11,color:T.text2}}, m.tipo==="transferencia"?`${cj?.nombre||"?"} → ${cjD?.nombre||"?"}`:(cj?.nombre||"?"), ct?` · ${ct.icon} ${ct.nombre}`:""),
+          e("p",{style:{margin:"2px 0 0",fontSize:10.5,color:T.text2}},`${disp(m.fecha)} ${horaDe(m.creado_en)} · ${m.autor||"?"}`)
+        ),
+        e("div",{style:{textAlign:"right"}},
+          e("p",{style:{margin:0,fontSize:15,fontWeight:700,color:tp.color}},`${m.tipo==="ingreso"?"+":m.tipo==="egreso"?"−":""}${fmt(m.monto,cj?.moneda)}`),
+          e("div",{style:{display:"flex",gap:6,marginTop:3,justifyContent:"flex-end"}},
+            m.tipo!=="transferencia" && e("button",{className:"edit-btn",onClick:()=>setEditMov({id:m.id,monto:String(m.monto),caja_id:m.caja_id,categoria_id:m.categoria_id||"",descripcion:m.descripcion||"",fecha:m.fecha})},"✏️"),
+            confirmDel===m.id ? e("span",{style:{display:"flex",gap:4}}, e("button",{className:"conf-yes",onClick:()=>borrarMov(m.id)},"Sí"), e("button",{className:"conf-no",onClick:()=>setConfirmDel(null)},"No")) : e("button",{className:"del-btn",onClick:()=>setConfirmDel(m.id)},"✕")
+          )
+        )
+      )
+    );
+  }
+
+  function renderCobro(x){
+    const sel = cobrarCaja[x.id];
+    return e("div",{key:x.id,className:"card",style:{borderLeft:"3px solid #d68910"}},
+      e("div",{style:{display:"flex",alignItems:"center",gap:10}},
+        e("div",{style:{flex:1,minWidth:0}},
+          e("p",{style:{margin:0,fontSize:15,fontWeight:600,color:T.text}},x.quien),
+          e("p",{style:{margin:"2px 0 0",fontSize:11,color:T.text2}},`${disp(x.fecha)}${x.descripcion?" · "+x.descripcion:""}${x.autor?" · "+x.autor:""}`)
+        ),
+        e("p",{style:{margin:0,fontSize:16,fontWeight:700,color:"#d68910"}},fmt(x.monto)),
+        confirmCobroDel===x.id
+          ? e("span",{style:{display:"flex",gap:4,marginLeft:8}}, e("button",{className:"conf-yes",onClick:()=>borrarCobro(x.id)},"Sí"), e("button",{className:"conf-no",onClick:()=>setConfirmCobroDel(null)},"No"))
+          : e("button",{className:"del-btn",style:{marginLeft:8},onClick:()=>setConfirmCobroDel(x.id)},"✕")
+      ),
+      sel===undefined
+        ? e("button",{className:"btn",style:{background:"#27ae60",color:"#fff",width:"100%",marginTop:10,padding:"8px"},onClick:()=>setCobrarCaja(p=>({...p,[x.id]:""}))},"✓ Marcar cobrado")
+        : e("div",{style:{display:"flex",gap:8,marginTop:10}},
+            e("select",{className:"inp",style:{flex:1},value:sel,onChange:ev=>setCobrarCaja(p=>({...p,[x.id]:ev.target.value}))}, e("option",{value:""},"¿A qué caja entró? (opcional)"), cajas.map(c=>e("option",{key:c.id,value:c.id},`${c.icon} ${c.nombre}`))),
+            e("button",{className:"btn",style:{background:"#27ae60",color:"#fff"},onClick:()=>cobrarItem(x,sel)},"OK"),
+            e("button",{className:"btn",style:{background:T.bg2,color:T.text2},onClick:()=>setCobrarCaja(p=>{const c={...p};delete c[x.id];return c;})},"✕")
+          )
+    );
+  }
+
   const css=`
     *{box-sizing:border-box;margin:0;padding:0}
     body{background:${T.bg};overscroll-behavior:none}
@@ -300,6 +397,8 @@ function App() {
     .leg{display:flex;align-items:center;gap:7px;padding:3px 0;font-size:12px}
     .mini{font-size:12px;border:0.5px solid ${T.border2};border-radius:8px;padding:6px 8px;background:${T.inputBg};color:${T.text};outline:none}
     .clearf{font-size:11px;padding:4px 10px;border-radius:16px;border:0.5px solid ${T.border2};background:none;color:${T.text2};cursor:pointer}
+    .grphdr{display:flex;align-items:center;justify-content:space-between;gap:8px;padding:9px 12px;border-radius:10px;background:${T.bg2};border:0.5px solid ${T.border};cursor:pointer;user-select:none}
+    .dayhdr{display:flex;align-items:center;justify-content:space-between;gap:8px;padding:5px 8px 5px 4px;cursor:pointer;user-select:none}
   `;
 
   const Header = e("div",{style:{borderBottom:`0.5px solid ${T.border}`}},
@@ -315,7 +414,7 @@ function App() {
       )
     ),
     e("div",{style:{display:"flex"}},
-      [["inicio","🏠 Inicio","#27ae60"],["nuevo","➕ Cargar","#2980b9"],["movimientos","📋 Movim.","#8e44ad"],["fijos","🔁 Fijos","#c0392b"],["analisis","📊 Análisis","#16a085"],["config","⚙️ Config","#d68910"]].map(([k,l,c])=>
+      [["inicio","🏠 Inicio","#27ae60"],["nuevo","➕ Cargar","#2980b9"],["movimientos","📋 Movim.","#8e44ad"],["cobrar","💰 Cobrar","#d68910"],["fijos","🔁 Fijos","#c0392b"],["analisis","📊 Análisis","#16a085"],["config","⚙️ Config","#7f8c8d"]].map(([k,l,c])=>
         e("button",{key:k,className:"tab",style:{borderBottomColor:view===k?c:"transparent",color:view===k?c:T.text2,fontWeight:view===k?700:400},onClick:()=>setView(k)},l)
       )
     )
@@ -335,6 +434,18 @@ function App() {
       e("div",{className:"card",style:{flex:1,borderTop:"3px solid #27ae60"}}, e("p",{style:{margin:0,fontSize:11,color:T.text2}},"Ingresos mes"), e("p",{style:{margin:"4px 0 0",fontSize:16,fontWeight:600,color:"#27ae60"}},fmt(ingresosMes))),
       e("div",{className:"card",style:{flex:1,borderTop:"3px solid #e74c3c"}}, e("p",{style:{margin:0,fontSize:11,color:T.text2}},"Egresos mes"), e("p",{style:{margin:"4px 0 0",fontSize:16,fontWeight:600,color:"#e74c3c"}},fmt(egresosMes))),
       e("div",{className:"card",style:{flex:1,borderTop:`3px solid ${netoMes>=0?"#27ae60":"#e74c3c"}`}}, e("p",{style:{margin:0,fontSize:11,color:T.text2}},"Neto mes"), e("p",{style:{margin:"4px 0 0",fontSize:16,fontWeight:600,color:netoMes>=0?"#27ae60":"#e74c3c"}},`${netoMes>=0?"+":""}${fmt(netoMes)}`))
+    ),
+    (totalCobrar>0 || hayRetiros) && e("div",{style:{display:"flex",gap:8}},
+      e("div",{className:"card",style:{flex:1,cursor:"pointer",borderLeft:"3px solid #d68910"},onClick:()=>setView("cobrar")},
+        e("p",{style:{margin:0,fontSize:11,color:T.text2}},"💰 A cobrar"),
+        e("p",{style:{margin:"4px 0 0",fontSize:16,fontWeight:600,color:"#d68910"}},fmt(totalCobrar)),
+        e("p",{style:{margin:"2px 0 0",fontSize:10.5,color:T.text2}},`${cobrarPend.length} pendiente${cobrarPend.length!==1?"s":""}`)
+      ),
+      e("div",{className:"card",style:{flex:1,borderLeft:"3px solid #16a085"}},
+        e("p",{style:{margin:0,fontSize:11,color:T.text2}},"↩️ Retiros socios"),
+        ...USUARIOS.map(u=>e("p",{key:u,style:{margin:"3px 0 0",fontSize:11.5,color:T.text,display:"flex",justifyContent:"space-between"}}, e("span",null,u), e("span",{style:{fontWeight:600}},fmt(retiros[u]||0)))),
+        difRet>0 && e("p",{style:{margin:"4px 0 0",fontSize:10,color:"#16a085",fontWeight:600}},`${aFavor} +${fmt(difRet)} a favor`)
+      )
     ),
     e("p",{style:{margin:"4px 0 -4px",fontSize:13,fontWeight:600,color:T.text}},"Cajas"),
     cajas.length===0 && e("p",{style:{color:T.text2,fontSize:14,textAlign:"center",padding:"20px 0"}},syncing?"Cargando...":"Creá tu primera caja en ⚙️ Config"),
@@ -363,6 +474,10 @@ function App() {
       e("div",{style:{flex:2}}, e("p",{className:"lbl"},"Descripción"), e("input",{className:"inp",value:descr,onChange:ev=>setDescr(ev.target.value),placeholder:"ej: pago proveedor"})),
       e("div",{style:{flex:1}}, e("p",{className:"lbl"},"Fecha"), e("input",{type:"date",className:"inp",value:fecha,max:today(),onChange:ev=>setFecha(ev.target.value)}))
     ),
+    tipo==="egreso" && e("label",{style:{display:"flex",alignItems:"center",gap:9,fontSize:13.5,color:T.text,cursor:"pointer",padding:"10px 12px",borderRadius:10,background:esRetiro?"#16a08518":T.inputBg,border:`0.5px solid ${esRetiro?"#16a085":T.border2}`}},
+      e("input",{type:"checkbox",checked:esRetiro,onChange:ev=>setEsRetiro(ev.target.checked),style:{width:17,height:17,accentColor:"#16a085"}}),
+      e("span",null,`↩️ Es un retiro de socio (${usuario})`)
+    ),
     e("button",{className:"btn",style:{background:TIPOS[tipo].color,color:"#fff",marginTop:4},onClick:guardarMov},`Registrar ${TIPOS[tipo].label.toLowerCase()}`)
   );
 
@@ -384,26 +499,29 @@ function App() {
         e("button",{className:"clearf",style:{color:"#16a085",borderColor:"#16a085"},onClick:exportarCSV},"⬇ Exportar CSV")
       )
     ),
-    e("div",{style:{flex:1,overflowY:"auto",padding:"12px 16px",display:"flex",flexDirection:"column",gap:7}},
+    e("div",{style:{flex:1,overflowY:"auto",padding:"12px 16px",display:"flex",flexDirection:"column",gap:10}},
       movsFil.length===0 && e("p",{style:{color:T.text2,textAlign:"center",marginTop:40,fontSize:14}},syncing?"Cargando...":"No hay movimientos."),
-      movsFil.map(m=>{
-        const tp=TIPOS[m.tipo]||TIPOS.egreso; const cj=cajaById(m.caja_id); const cjD=cajaById(m.caja_destino_id); const ct=catById(m.categoria_id);
-        return e("div",{key:m.id,className:"card",style:{borderLeft:`3px solid ${tp.color}`,padding:"10px 13px"}},
-          e("div",{style:{display:"flex",alignItems:"flex-start",gap:10}},
-            e("span",{style:{fontSize:18}},tp.icon),
-            e("div",{style:{flex:1,minWidth:0}},
-              e("p",{style:{margin:0,fontSize:14,fontWeight:600,color:T.text}},m.descripcion||tp.label),
-              e("p",{style:{margin:"2px 0 0",fontSize:11,color:T.text2}}, m.tipo==="transferencia"?`${cj?.nombre||"?"} → ${cjD?.nombre||"?"}`:(cj?.nombre||"?"), ct?` · ${ct.icon} ${ct.nombre}`:""),
-              e("p",{style:{margin:"2px 0 0",fontSize:10.5,color:T.text2}},`${disp(m.fecha)} ${horaDe(m.creado_en)} · ${m.autor||"?"}`)
-            ),
-            e("div",{style:{textAlign:"right"}},
-              e("p",{style:{margin:0,fontSize:15,fontWeight:700,color:tp.color}},`${m.tipo==="ingreso"?"+":m.tipo==="egreso"?"−":""}${fmt(m.monto,cj?.moneda)}`),
-              e("div",{style:{display:"flex",gap:6,marginTop:3,justifyContent:"flex-end"}},
-                m.tipo!=="transferencia" && e("button",{className:"edit-btn",onClick:()=>setEditMov({id:m.id,monto:String(m.monto),caja_id:m.caja_id,categoria_id:m.categoria_id||"",descripcion:m.descripcion||"",fecha:m.fecha})},"✏️"),
-                confirmDel===m.id ? e("span",{style:{display:"flex",gap:4}}, e("button",{className:"conf-yes",onClick:()=>borrarMov(m.id)},"Sí"), e("button",{className:"conf-no",onClick:()=>setConfirmDel(null)},"No")) : e("button",{className:"del-btn",onClick:()=>setConfirmDel(m.id)},"✕")
-              )
+      gruposMov.map(g=>{
+        const mCol = !!colMeses[g.mk]; const neto=g.ing-g.egr;
+        return e("div",{key:g.mk,style:{display:"flex",flexDirection:"column",gap:7}},
+          e("div",{className:"grphdr",onClick:()=>setColMeses(p=>({...p,[g.mk]:!p[g.mk]}))},
+            e("span",{style:{fontSize:13.5,fontWeight:700,color:T.text}}, `${mCol?"▸":"▾"} ${mesLabel(g.mk)}`),
+            e("span",{style:{display:"flex",alignItems:"center",gap:8}},
+              e("span",{style:{fontSize:11,color:"#27ae60"}},`+${fmt(g.ing)}`),
+              e("span",{style:{fontSize:11,color:"#e74c3c"}},`−${fmt(g.egr)}`),
+              e("span",{style:{fontSize:11,fontWeight:700,color:neto>=0?"#27ae60":"#e74c3c"}},`${neto>=0?"+":""}${fmt(neto)}`)
             )
-          )
+          ),
+          !mCol && g.dias.map(d=>{
+            const dCol = !!colDias[d.dk];
+            return e("div",{key:d.dk,style:{display:"flex",flexDirection:"column",gap:6}},
+              e("div",{className:"dayhdr",onClick:()=>setColDias(p=>({...p,[d.dk]:!p[d.dk]}))},
+                e("span",{style:{fontSize:11.5,fontWeight:600,color:T.text2}}, `${dCol?"▸":"▾"} ${diaLabel(d.dk)}`),
+                e("span",{style:{fontSize:10.5,color:T.text2}}, `${d.items.length} mov.`)
+              ),
+              !dCol && e("div",{style:{display:"flex",flexDirection:"column",gap:7}}, d.items.map(renderMov))
+            );
+          })
         );
       })
     )
@@ -504,6 +622,32 @@ function App() {
     )
   );
 
+  const Cobrar = e("div",{style:{flex:1,overflowY:"auto",padding:"14px 16px",display:"flex",flexDirection:"column",gap:10}},
+    e("p",{style:{margin:"0 0 2px",fontSize:13,color:T.text2,lineHeight:1.5}},"Cuentas por cobrar: plata que te deben y todavía no entró. Al marcar \"cobrado\" podés registrar el ingreso en la caja que elijas."),
+    cobrarPend.length>0 && e("div",{className:"card",style:{display:"flex",justifyContent:"space-between",alignItems:"center",background:"linear-gradient(135deg,#d6891022,#f39c1222)"}},
+      e("span",{style:{fontSize:12,color:T.text2}},"Total a cobrar"), e("span",{style:{fontSize:16,fontWeight:600,color:"#d68910"}},fmt(totalCobrar))
+    ),
+    ...cobrarPend.map(renderCobro),
+    cobrarPend.length===0 && !syncing && e("p",{style:{color:T.text2,textAlign:"center",margin:"16px 0",fontSize:14}},"No hay cuentas pendientes de cobro."),
+    e("div",{style:{background:T.bg2,border:`0.5px dashed ${T.border2}`,borderRadius:14,padding:14,marginTop:4}},
+      e("p",{style:{margin:"0 0 10px",fontSize:13,fontWeight:600,color:T.text}},"➕ Nueva cuenta por cobrar"),
+      e("input",{className:"inp",style:{marginBottom:8},value:nuevoCobro.quien,onChange:ev=>setNuevoCobro({...nuevoCobro,quien:ev.target.value}),placeholder:"¿Quién debe? (ej: Logística)"}),
+      e("div",{style:{display:"flex",gap:8,marginBottom:8}},
+        e("input",{type:"number",className:"inp",style:{flex:1},value:nuevoCobro.monto,onChange:ev=>setNuevoCobro({...nuevoCobro,monto:ev.target.value}),placeholder:"Monto"}),
+        e("input",{type:"date",className:"inp",style:{flex:1},value:nuevoCobro.fecha,max:today(),onChange:ev=>setNuevoCobro({...nuevoCobro,fecha:ev.target.value})})
+      ),
+      e("input",{className:"inp",style:{marginBottom:10},value:nuevoCobro.descripcion,onChange:ev=>setNuevoCobro({...nuevoCobro,descripcion:ev.target.value}),placeholder:"Descripción (opcional)"}),
+      e("button",{className:"btn",style:{background:"#d68910",color:"#fff",width:"100%"},onClick:agregarCobro},"Agregar")
+    ),
+    cobrarHecho.length>0 && e("div",{style:{marginTop:4}},
+      e("p",{style:{margin:"6px 0 8px",fontSize:13,fontWeight:600,color:T.text}},"✅ Ya cobradas"),
+      ...cobrarHecho.slice(0,30).map(x=>e("div",{key:x.id,className:"card",style:{opacity:.6,display:"flex",justifyContent:"space-between",alignItems:"center",padding:"9px 13px",marginBottom:6}},
+        e("div",{style:{minWidth:0}}, e("p",{style:{margin:0,fontSize:13,color:T.text}},x.quien), e("p",{style:{margin:0,fontSize:11,color:T.text2}},`${disp(x.fecha)}${x.descripcion?" · "+x.descripcion:""}`)),
+        e("span",{style:{fontSize:14,fontWeight:600,color:"#27ae60"}},fmt(x.monto))
+      ))
+    )
+  );
+
   const Modal = editMov && e("div",{className:"modal-bg",onClick:()=>setEditMov(null)},
     e("div",{className:"modal",onClick:ev=>ev.stopPropagation()},
       e("p",{style:{margin:"0 0 16px",fontSize:16,fontWeight:600,color:T.text}},"✏️ Editar movimiento"),
@@ -531,6 +675,7 @@ function App() {
     view==="inicio" && Inicio,
     view==="nuevo" && Nuevo,
     view==="movimientos" && Movimientos,
+    view==="cobrar" && Cobrar,
     view==="fijos" && Fijos,
     view==="analisis" && Analisis,
     view==="config" && Config
