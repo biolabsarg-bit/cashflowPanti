@@ -60,19 +60,22 @@ async function clasificar(texto, cajas, cats, cobrarPend) {
   const listaCajas = cajas.map(c=>`${c.nombre} (id ${c.id}, ${c.moneda})`).join("; ") || "ninguna";
   const listaCats = cats.map(c=>`${c.nombre} (id ${c.id}, ${c.tipo})`).join("; ") || "ninguna";
   const listaCobrar = (cobrarPend||[]).map(c=>`${c.quien} (${c.monto})`).join("; ") || "ninguna";
+  const socios = [...new Set(Object.values(SOCIOS))].join(", ");
   const sys = `Sos un clasificador para una app de cashflow empresarial (pesos argentinos). HOY es ${hoy}.
 CAJAS DISPONIBLES: ${listaCajas}.
 CATEGORÍAS DISPONIBLES: ${listaCats}.
 CUENTAS POR COBRAR PENDIENTES: ${listaCobrar}.
+SOCIOS: ${socios}.
 Analizá el mensaje y devolvé SOLO JSON (sin backticks).
 
 TIPOS:
 1. "movimiento" — registra un movimiento de dinero YA efectuado.
-   {"tipo":"movimiento","mov_tipo":"ingreso"|"egreso"|"transferencia","monto":50000,"caja_id":123,"caja_destino_id":null,"categoria_id":456|null,"descripcion":"pago proveedor","es_retiro":false,"fecha":"${hoy}"}
+   {"tipo":"movimiento","mov_tipo":"ingreso"|"egreso"|"transferencia","monto":50000,"caja_id":123,"caja_destino_id":null,"categoria_id":456|null,"descripcion":"pago proveedor","es_retiro":false,"retira":null,"fecha":"${hoy}"}
    - "pagué/gasté/salió" → egreso. "entró/cobré/facturé/ingresó" → ingreso. "pasé/transferí/moví de X a Y" → transferencia.
    - Para transferencia: caja_id es ORIGEN, caja_destino_id es DESTINO.
    - Matcheá la caja y categoría mencionadas con los IDs de las listas. Si no se menciona caja clara, usá la primera. Si no hay categoría clara, categoria_id null.
-   - "es_retiro": true SOLO si es un RETIRO DE SOCIO (un socio saca plata de la empresa para sí mismo: "retiré", "saqué para mí", "me llevé", "retiro de socio"). En ese caso mov_tipo SIEMPRE es "egreso". Si no, false.
+   - "es_retiro": true SOLO si es un RETIRO DE SOCIO (un socio saca plata de la empresa para sí mismo: "retiré", "saqué para mí", "me llevé", "retiro de socio", "retiro X" donde X es un socio). En ese caso mov_tipo SIEMPRE es "egreso". Si no, false.
+   - "retira": SOLO para retiros. Si el mensaje menciona QUIÉN retira con un nombre de la lista SOCIOS (ej "retiro Santi 100000", "Santi retiró 50000"), poné ese nombre EXACTO de la lista. Si no se menciona ningún socio, dejá null (se asume el remitente del mensaje).
 2. "cobrar" — registra una CUENTA POR COBRAR (alguien nos DEBE plata, todavía NO se efectuó el cobro).
    {"tipo":"cobrar","quien":"Logística","monto":200000,"descripcion":"flete marzo","fecha":"${hoy}"}
    - Disparadores: "X nos debe", "tenemos que cobrarle a X", "X me tiene que pagar", "queda a cobrar de X".
@@ -140,16 +143,24 @@ export default async function handler(req, res) {
 
       const fecha = (c.fecha && /^\d{4}-\d{2}-\d{2}$/.test(c.fecha)) ? c.fecha : HOY();
       const esRetiro = c.mov_tipo==="egreso" && !!c.es_retiro;
+      // Para retiros, el autor es quien RETIRA (si se menciona), no quien manda el mensaje.
+      const NOMBRES = [...new Set(Object.values(SOCIOS))];
+      let autorMov = autor;
+      if (esRetiro && c.retira) {
+        const q = String(c.retira).toLowerCase();
+        const match = NOMBRES.find(n => n.toLowerCase()===q || n.toLowerCase().includes(q) || q.includes(n.toLowerCase()));
+        if (match) autorMov = match;
+      }
       const obj = {
         id: Date.now(), tipo:c.mov_tipo, monto:c.monto, caja_id:caja.id,
         caja_destino_id: cajaD?cajaD.id:null, categoria_id: cat?cat.id:null,
         descripcion: c.descripcion || (c.mov_tipo==="transferencia"?"Transferencia":""),
-        fecha, autor, es_retiro:esRetiro, creado_en:new Date().toISOString()
+        fecha, autor:autorMov, es_retiro:esRetiro, creado_en:new Date().toISOString()
       };
       const ok = await sbInsert("movimientos", obj);
       if (!ok) return res.status(200).send(twiml("⚠️ No se pudo guardar. Intentá de nuevo."));
 
-      const tipoTxt = esRetiro?"↩️ Retiro de socio":c.mov_tipo==="ingreso"?"⬇️ Ingreso":c.mov_tipo==="egreso"?"⬆️ Egreso":"🔁 Transferencia";
+      const tipoTxt = esRetiro?`↩️ Retiro de ${autorMov}`:c.mov_tipo==="ingreso"?"⬇️ Ingreso":c.mov_tipo==="egreso"?"⬆️ Egreso":"🔁 Transferencia";
       const detalle = c.mov_tipo==="transferencia"
         ? `${fmt(c.monto,caja.moneda)} de ${caja.nombre} → ${cajaD.nombre}`
         : `${fmt(c.monto,caja.moneda)} · ${caja.nombre}${cat?` · ${cat.nombre}`:""}`;
