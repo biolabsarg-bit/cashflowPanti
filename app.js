@@ -145,7 +145,7 @@ function App() {
   const [nuevoCobro, setNuevoCobro] = useState({quien:"",monto:"",descripcion:"",fecha:today()});
   const [confirmCobroDel, setConfirmCobroDel] = useState(null);
   const [cobrarCaja, setCobrarCaja] = useState({});
-  const [nuevoRetiro, setNuevoRetiro] = useState({monto:"",caja_id:"",descr:""});
+  const [nuevoRetiro, setNuevoRetiro] = useState({monto:"",caja_id:"",descr:"",autor:""});
   const [colMeses, setColMeses] = useState({});
   const [colDias, setColDias] = useState({});
 
@@ -194,7 +194,7 @@ function App() {
   }
   async function guardarEdit(){
     const m=parseFloat(editMov.monto); if(!m||m<=0) return;
-    const cambios={ monto:m, caja_id:Number(editMov.caja_id), categoria_id:editMov.categoria_id?Number(editMov.categoria_id):null, descripcion:editMov.descripcion, fecha:editMov.fecha };
+    const cambios={ monto:m, caja_id:Number(editMov.caja_id), categoria_id:editMov.categoria_id?Number(editMov.categoria_id):null, descripcion:editMov.descripcion, fecha:editMov.fecha, autor:editMov.autor };
     setMovs(prev=>prev.map(x=>x.id===editMov.id?{...x,...cambios}:x)); setEditMov(null);
     try{ await sbPatch("movimientos",editMov.id,cambios); }catch{}
   }
@@ -245,8 +245,8 @@ function App() {
   }
   async function agregarRetiro(){
     const m=parseFloat(nuevoRetiro.monto); if(!m||m<=0||!nuevoRetiro.caja_id) return;
-    const obj={ id:Date.now(), tipo:"egreso", monto:m, caja_id:Number(nuevoRetiro.caja_id), caja_destino_id:null, categoria_id:null, descripcion:nuevoRetiro.descr||"Retiro", fecha:today(), autor:usuario, es_retiro:true, creado_en:new Date().toISOString() };
-    try { const g=await sbPost("movimientos",obj); setMovs(prev=>[g,...prev]); setNuevoRetiro({monto:"",caja_id:"",descr:""}); } catch {}
+    const obj={ id:Date.now(), tipo:"egreso", monto:m, caja_id:Number(nuevoRetiro.caja_id), caja_destino_id:null, categoria_id:null, descripcion:nuevoRetiro.descr||"Retiro", fecha:today(), autor:nuevoRetiro.autor||usuario, es_retiro:true, creado_en:new Date().toISOString() };
+    try { const g=await sbPost("movimientos",obj); setMovs(prev=>[g,...prev]); setNuevoRetiro({monto:"",caja_id:"",descr:"",autor:""}); } catch {}
   }
   function cerrarSesion(){ try{ localStorage.removeItem("cf_auth"); localStorage.removeItem("cf_user"); }catch{} setAuth(false); }
   function cambiarUsuario(){ try{ localStorage.removeItem("cf_user"); }catch{} setAuth(false); }
@@ -349,7 +349,7 @@ function App() {
         e("div",{style:{textAlign:"right"}},
           e("p",{style:{margin:0,fontSize:15,fontWeight:700,color:tp.color}},`${m.tipo==="ingreso"?"+":m.tipo==="egreso"?"−":""}${fmt(m.monto,cj?.moneda)}`),
           e("div",{style:{display:"flex",gap:6,marginTop:3,justifyContent:"flex-end"}},
-            m.tipo!=="transferencia" && e("button",{className:"edit-btn",onClick:()=>setEditMov({id:m.id,monto:String(m.monto),caja_id:m.caja_id,categoria_id:m.categoria_id||"",descripcion:m.descripcion||"",fecha:m.fecha})},"✏️"),
+            m.tipo!=="transferencia" && e("button",{className:"edit-btn",onClick:()=>setEditMov({id:m.id,monto:String(m.monto),caja_id:m.caja_id,categoria_id:m.categoria_id||"",descripcion:m.descripcion||"",fecha:m.fecha,autor:m.autor||usuario,es_retiro:!!m.es_retiro})},"✏️"),
             confirmDel===m.id ? e("span",{style:{display:"flex",gap:4}}, e("button",{className:"conf-yes",onClick:()=>borrarMov(m.id)},"Sí"), e("button",{className:"conf-no",onClick:()=>setConfirmDel(null)},"No")) : e("button",{className:"del-btn",onClick:()=>setConfirmDel(m.id)},"✕")
           )
         )
@@ -667,13 +667,19 @@ function App() {
         : (hayRetiros?e("p",{style:{margin:"8px 0 0",fontSize:12.5,color:"rgba(255,255,255,.9)",borderTop:"1px solid rgba(255,255,255,.25)",paddingTop:8}},"⚖️ Retiros igualados."):null)
     ),
     e("div",{style:{background:T.bg2,border:`0.5px dashed ${T.border2}`,borderRadius:14,padding:14}},
-      e("p",{style:{margin:"0 0 10px",fontSize:13,fontWeight:600,color:T.text}},`➕ Registrar retiro (${usuario})`),
+      e("p",{style:{margin:"0 0 10px",fontSize:13,fontWeight:600,color:T.text}},"➕ Registrar retiro"),
+      e("p",{className:"lbl"},"¿Quién retira?"),
+      e("div",{style:{display:"flex",gap:8,marginBottom:10}},
+        USUARIOS.map(u=>{ const sel=(nuevoRetiro.autor||usuario)===u;
+          return e("button",{key:u,className:"seg",onClick:()=>setNuevoRetiro({...nuevoRetiro,autor:u}),style:{borderRadius:10,background:sel?"#16a085":T.inputBg,color:sel?"#fff":T.text2}},u);
+        })
+      ),
       e("div",{style:{display:"flex",gap:8,marginBottom:8}},
         e("input",{type:"number",className:"inp",style:{flex:1},value:nuevoRetiro.monto,onChange:ev=>setNuevoRetiro({...nuevoRetiro,monto:ev.target.value}),placeholder:"Monto"}),
         e("select",{className:"inp",style:{flex:1},value:nuevoRetiro.caja_id,onChange:ev=>setNuevoRetiro({...nuevoRetiro,caja_id:ev.target.value})}, e("option",{value:""},"Caja..."), cajas.map(c=>e("option",{key:c.id,value:c.id},`${c.icon} ${c.nombre}`)))
       ),
       e("input",{className:"inp",style:{marginBottom:10},value:nuevoRetiro.descr,onChange:ev=>setNuevoRetiro({...nuevoRetiro,descr:ev.target.value}),placeholder:"Nota (opcional)"}),
-      e("button",{className:"btn",style:{background:"#16a085",color:"#fff",width:"100%"},onClick:agregarRetiro},"Registrar retiro")
+      e("button",{className:"btn",style:{background:"#16a085",color:"#fff",width:"100%"},onClick:agregarRetiro},`Registrar retiro de ${nuevoRetiro.autor||usuario}`)
     ),
     ...USUARIOS.map(u=>{
       const items=retirosList.filter(m=>m.autor===u);
@@ -696,6 +702,12 @@ function App() {
       e("div",{style:{display:"flex",gap:10,marginBottom:12}},
         e("div",{style:{flex:1}}, e("p",{className:"lbl"},"Monto"), e("input",{type:"number",className:"inp",value:editMov.monto,onChange:ev=>setEditMov({...editMov,monto:ev.target.value})})),
         e("div",{style:{flex:1}}, e("p",{className:"lbl"},"Fecha"), e("input",{type:"date",className:"inp",value:editMov.fecha,max:today(),onChange:ev=>setEditMov({...editMov,fecha:ev.target.value})}))
+      ),
+      e("p",{className:"lbl"}, editMov.es_retiro?"¿Quién retira?":"Autor"),
+      e("div",{style:{display:"flex",gap:8,marginBottom:12}},
+        USUARIOS.map(u=>{ const sel=editMov.autor===u;
+          return e("button",{key:u,className:"seg",onClick:()=>setEditMov({...editMov,autor:u}),style:{borderRadius:10,background:sel?"#2980b9":T.inputBg,color:sel?"#fff":T.text2}},u);
+        })
       ),
       e("p",{className:"lbl"},"Caja"),
       e("select",{className:"inp",style:{marginBottom:12},value:editMov.caja_id,onChange:ev=>setEditMov({...editMov,caja_id:ev.target.value})}, cajas.map(c=>e("option",{key:c.id,value:c.id},`${c.icon} ${c.nombre}`))),
