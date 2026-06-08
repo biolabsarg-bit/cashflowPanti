@@ -2,6 +2,9 @@
   "rewrites": [
     { "source": "/api/(.*)", "destination": "/api/$1" }
   ],
+  "crons": [
+    { "path": "/api/cron-liquidar", "schedule": "0 9 * * *" }
+  ],
   "headers": [
     {
       "source": "/sw.js",
