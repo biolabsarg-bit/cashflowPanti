@@ -31,6 +31,27 @@ async function sbPatch(tabla, id, cambios) {
   return r.ok;
 }
 
+// Liquida automáticamente las cuentas por cobrar vencidas (auto_liq) y registra el ingreso.
+// Usa un PATCH condicional (cobrado=eq.false) para que sólo una ejecución procese cada fila.
+async function liquidarVencidas() {
+  const due = await sbGet("cobrar", "select=*&cobrado=eq.false&auto_liq=eq.true");
+  const ahora = Date.now();
+  for (const x of due) {
+    if (!x.fecha_liquidacion || !x.caja_liq_id) continue;
+    if (new Date(x.fecha_liquidacion).getTime() > ahora) continue;
+    const r = await fetch(`${SB_URL}/rest/v1/cobrar?id=eq.${x.id}&cobrado=eq.false`, { method:"PATCH", headers:{...SB_H,"Prefer":"return=representation"}, body:JSON.stringify({cobrado:true}) });
+    const rows = r.ok ? await r.json() : [];
+    if (!rows.length) continue; // ya la procesó otra ejecución
+    const fechaMov = String(x.fecha_liquidacion).slice(0,10) || HOY();
+    await sbInsert("movimientos", {
+      id: Date.now()+Math.floor(Math.random()*1000), tipo:"ingreso", monto:Number(x.monto),
+      caja_id:Number(x.caja_liq_id), caja_destino_id:null, categoria_id:null,
+      descripcion:`Liquidación: ${x.quien}${x.descripcion?` - ${x.descripcion}`:""}`,
+      fecha:fechaMov, autor:x.autor||"Sistema", es_retiro:false, creado_en:new Date().toISOString()
+    });
+  }
+}
+
 function twiml(msg) {
   if (!msg) return "<?xml version=\"1.0\" encoding=\"UTF-8\"?><Response></Response>";
   const safe = msg.replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;");
@@ -125,6 +146,9 @@ export default async function handler(req, res) {
   if (!texto) return res.status(200).send(twiml(null));
 
   try {
+    // Liquida cuentas vencidas antes de procesar (best-effort)
+    try { await liquidarVencidas(); } catch {}
+
     const [cajas, cats, cobrarPend] = await Promise.all([
       sbGet("cajas","select=*&order=orden.asc"),
       sbGet("categorias","select=*"),
