@@ -32,6 +32,8 @@ const fmt = (n,mon="ARS") => (mon==="USD"?"US$":"$") + Number(n||0).toLocaleStri
 const today = () => new Date().toISOString().slice(0,10);
 const disp = iso => { const [y,m,d]=iso.split("-"); return `${d}/${m}/${y}`; };
 const horaDe = ts => { try { const d=new Date(ts); return `${String(d.getHours()).padStart(2,"0")}:${String(d.getMinutes()).padStart(2,"0")}`; } catch { return ""; } };
+const dispDT = ts => { try { const d=new Date(ts); return `${String(d.getDate()).padStart(2,"0")}/${String(d.getMonth()+1).padStart(2,"0")} ${String(d.getHours()).padStart(2,"0")}:${String(d.getMinutes()).padStart(2,"0")}`; } catch { return ""; } };
+const toLocalInput = ts => { try { const d=new Date(ts); const p=n=>String(n).padStart(2,"0"); return `${d.getFullYear()}-${p(d.getMonth()+1)}-${p(d.getDate())}T${p(d.getHours())}:${p(d.getMinutes())}`; } catch { return ""; } };
 const MESES = ["Ene","Feb","Mar","Abr","May","Jun","Jul","Ago","Sep","Oct","Nov","Dic"];
 
 const THEMES = {
@@ -142,7 +144,7 @@ function App() {
   const [confirmFijoDel, setConfirmFijoDel] = useState(null);
   const [editMov, setEditMov] = useState(null);
   const [hovTorta, setHovTorta] = useState(null);
-  const [nuevoCobro, setNuevoCobro] = useState({quien:"",monto:"",descripcion:"",fecha:today()});
+  const [nuevoCobro, setNuevoCobro] = useState({quien:"",monto:"",descripcion:"",fecha:today(),fechaLiq:"",cajaLiq:"",auto:false});
   const [confirmCobroDel, setConfirmCobroDel] = useState(null);
   const [cobrarCaja, setCobrarCaja] = useState({});
   const [nuevoRetiro, setNuevoRetiro] = useState({monto:"",caja_id:"",descr:"",autor:""});
@@ -168,6 +170,7 @@ function App() {
   useEffect(()=>{ if(auth) cargar(); },[auth,cargar]);
   useEffect(()=>{ if(!auth) return; const iv=setInterval(cargar,12000); return ()=>clearInterval(iv); },[auth,cargar]);
   useEffect(()=>{ if(!auth) return; (async()=>{ try{ const r=await fetch("https://dolarapi.com/v1/dolares/blue"); if(r.ok){ setDolar(await r.json()); } }catch{} })(); },[auth]);
+  useEffect(()=>{ if(auth) sweepLiquidaciones(cobrar); },[cobrar,auth]);
 
   const e = React.createElement;
   if (!auth) return e(Login, { onOk:(u)=>{setAuth(true);setUsuario(u);}, dark });
@@ -230,8 +233,12 @@ function App() {
   async function agregarCobro(){
     const quien=nuevoCobro.quien.trim(); const m=parseFloat(nuevoCobro.monto);
     if(!quien||!m||m<=0) return;
-    const obj={ id:Date.now(), quien, monto:m, descripcion:nuevoCobro.descripcion||"", fecha:nuevoCobro.fecha||today(), cobrado:false, autor:usuario, creado_en:new Date().toISOString() };
-    try { const g=await sbPost("cobrar",obj); setCobrar(prev=>[g,...prev]); setNuevoCobro({quien:"",monto:"",descripcion:"",fecha:today()}); } catch {}
+    const fechaLiqISO = nuevoCobro.fechaLiq ? new Date(nuevoCobro.fechaLiq).toISOString() : null;
+    const obj={ id:Date.now(), quien, monto:m, descripcion:nuevoCobro.descripcion||"", fecha:nuevoCobro.fecha||today(),
+      fecha_liquidacion:fechaLiqISO, caja_liq_id:nuevoCobro.cajaLiq?Number(nuevoCobro.cajaLiq):null,
+      auto_liq: !!(nuevoCobro.auto && fechaLiqISO && nuevoCobro.cajaLiq),
+      cobrado:false, autor:usuario, creado_en:new Date().toISOString() };
+    try { const g=await sbPost("cobrar",obj); setCobrar(prev=>[g,...prev]); setNuevoCobro({quien:"",monto:"",descripcion:"",fecha:today(),fechaLiq:"",cajaLiq:"",auto:false}); } catch {}
   }
   async function borrarCobro(id){ setCobrar(prev=>prev.filter(x=>x.id!==id)); setConfirmCobroDel(null); try{ await sbDel("cobrar",id); }catch{} }
   async function cobrarItem(x, cajaIdSel){
@@ -242,6 +249,28 @@ function App() {
     setCobrar(prev=>prev.map(y=>y.id===x.id?{...y,cobrado:true}:y));
     setCobrarCaja(prev=>{ const c={...prev}; delete c[x.id]; return c; });
     try{ await sbPatch("cobrar",x.id,{cobrado:true}); }catch{}
+  }
+  // "Reclama" la fila de forma atómica (sólo el primer cliente que la pasa a cobrado registra el ingreso)
+  async function liquidarUna(x){
+    try {
+      const r = await fetch(`${SB_URL}/rest/v1/cobrar?id=eq.${x.id}&cobrado=eq.false`, { method:"PATCH", headers:{...SB_H,"Prefer":"return=representation"}, body:JSON.stringify({cobrado:true}) });
+      const rows = r.ok ? await r.json() : [];
+      if(!rows.length) return false; // otro cliente/cron ya la liquidó
+      if(x.caja_liq_id){
+        const fechaMov = (x.fecha_liquidacion||"").slice(0,10) || today();
+        const obj={ id:Date.now()+Math.floor(Math.random()*1000), tipo:"ingreso", monto:Number(x.monto), caja_id:Number(x.caja_liq_id), caja_destino_id:null, categoria_id:null, descripcion:`Liquidación: ${x.quien}${x.descripcion?" - "+x.descripcion:""}`, fecha:fechaMov, autor:x.autor||usuario, es_retiro:false, creado_en:new Date().toISOString() };
+        await sbPost("movimientos",obj);
+      }
+      return true;
+    } catch { return false; }
+  }
+  async function sweepLiquidaciones(lista){
+    const now=Date.now();
+    const due=(lista||[]).filter(x=>!x.cobrado && x.auto_liq && x.fecha_liquidacion && x.caja_liq_id && new Date(x.fecha_liquidacion).getTime()<=now);
+    if(!due.length) return;
+    let changed=false;
+    for(const x of due){ const ok=await liquidarUna(x); if(ok) changed=true; }
+    if(changed) cargar();
   }
   async function agregarRetiro(){
     const m=parseFloat(nuevoRetiro.monto); if(!m||m<=0||!nuevoRetiro.caja_id) return;
@@ -359,11 +388,21 @@ function App() {
 
   function renderCobro(x){
     const sel = cobrarCaja[x.id];
-    return e("div",{key:x.id,className:"card",style:{borderLeft:"3px solid #d68910"}},
+    let liqTxt=null, liqColor=T.text2;
+    if(x.fecha_liquidacion){
+      const t=new Date(x.fecha_liquidacion).getTime(), ahora=Date.now();
+      const cj=cajaById(Number(x.caja_liq_id));
+      const fechaStr=dispDT(x.fecha_liquidacion);
+      const venc = t<=ahora;
+      if(x.auto_liq){ liqColor = venc?"#e67e22":"#16a085"; liqTxt=`${venc?"⏳ liquidando…":"🤖 auto-liquida"} ${fechaStr}${cj?` → ${cj.icon} ${cj.nombre}`:""}`; }
+      else { liqTxt=`📅 liquida ${fechaStr}${cj?` → ${cj.nombre}`:""}`; }
+    }
+    return e("div",{key:x.id,className:"card",style:{borderLeft:`3px solid ${x.auto_liq?"#16a085":"#d68910"}`}},
       e("div",{style:{display:"flex",alignItems:"center",gap:10}},
         e("div",{style:{flex:1,minWidth:0}},
           e("p",{style:{margin:0,fontSize:15,fontWeight:600,color:T.text}},x.quien),
-          e("p",{style:{margin:"2px 0 0",fontSize:11,color:T.text2}},`${disp(x.fecha)}${x.descripcion?" · "+x.descripcion:""}${x.autor?" · "+x.autor:""}`)
+          e("p",{style:{margin:"2px 0 0",fontSize:11,color:T.text2}},`${disp(x.fecha)}${x.descripcion?" · "+x.descripcion:""}${x.autor?" · "+x.autor:""}`),
+          liqTxt && e("p",{style:{margin:"3px 0 0",fontSize:11,fontWeight:600,color:liqColor}},liqTxt)
         ),
         e("p",{style:{margin:0,fontSize:16,fontWeight:700,color:"#d68910"}},fmt(x.monto)),
         confirmCobroDel===x.id
@@ -371,7 +410,7 @@ function App() {
           : e("button",{className:"del-btn",style:{marginLeft:8},onClick:()=>setConfirmCobroDel(x.id)},"✕")
       ),
       sel===undefined
-        ? e("button",{className:"btn",style:{background:"#27ae60",color:"#fff",width:"100%",marginTop:10,padding:"8px"},onClick:()=>setCobrarCaja(p=>({...p,[x.id]:""}))},"✓ Marcar cobrado")
+        ? e("button",{className:"btn",style:{background:"#27ae60",color:"#fff",width:"100%",marginTop:10,padding:"8px"},onClick:()=>setCobrarCaja(p=>({...p,[x.id]: x.caja_liq_id?String(x.caja_liq_id):""}))},"✓ Marcar cobrado")
         : e("div",{style:{display:"flex",gap:8,marginTop:10}},
             e("select",{className:"inp",style:{flex:1},value:sel,onChange:ev=>setCobrarCaja(p=>({...p,[x.id]:ev.target.value}))}, e("option",{value:""},"¿A qué caja entró? (opcional)"), cajas.map(c=>e("option",{key:c.id,value:c.id},`${c.icon} ${c.nombre}`))),
             e("button",{className:"btn",style:{background:"#27ae60",color:"#fff"},onClick:()=>cobrarItem(x,sel)},"OK"),
@@ -643,6 +682,18 @@ function App() {
         e("input",{type:"date",className:"inp",style:{flex:1},value:nuevoCobro.fecha,max:today(),onChange:ev=>setNuevoCobro({...nuevoCobro,fecha:ev.target.value})})
       ),
       e("input",{className:"inp",style:{marginBottom:10},value:nuevoCobro.descripcion,onChange:ev=>setNuevoCobro({...nuevoCobro,descripcion:ev.target.value}),placeholder:"Descripción (opcional)"}),
+      e("div",{style:{borderTop:`0.5px solid ${T.border}`,paddingTop:10,marginBottom:10}},
+        e("p",{className:"lbl",style:{marginBottom:6}},"⏱️ Liquidación estimada (opcional)"),
+        e("div",{style:{display:"flex",gap:8,marginBottom:8}},
+          e("input",{type:"datetime-local",className:"inp",style:{flex:1},value:nuevoCobro.fechaLiq,onChange:ev=>setNuevoCobro({...nuevoCobro,fechaLiq:ev.target.value})}),
+          e("select",{className:"inp",style:{flex:1},value:nuevoCobro.cajaLiq,onChange:ev=>setNuevoCobro({...nuevoCobro,cajaLiq:ev.target.value})}, e("option",{value:""},"Caja destino..."), cajas.map(c=>e("option",{key:c.id,value:c.id},`${c.icon} ${c.nombre}`)))
+        ),
+        e("label",{style:{display:"flex",alignItems:"center",gap:9,fontSize:12.5,color:(nuevoCobro.fechaLiq&&nuevoCobro.cajaLiq)?T.text:T.text2,cursor:(nuevoCobro.fechaLiq&&nuevoCobro.cajaLiq)?"pointer":"not-allowed"}},
+          e("input",{type:"checkbox",checked:nuevoCobro.auto,disabled:!(nuevoCobro.fechaLiq&&nuevoCobro.cajaLiq),onChange:ev=>setNuevoCobro({...nuevoCobro,auto:ev.target.checked}),style:{width:16,height:16,accentColor:"#16a085"}}),
+          e("span",null,"🤖 Liquidar automáticamente al llegar la fecha")
+        ),
+        nuevoCobro.fechaLiq && !nuevoCobro.cajaLiq && e("p",{style:{margin:"6px 0 0",fontSize:10.5,color:"#e67e22"}},"Para liquidar automático elegí la caja destino.")
+      ),
       e("button",{className:"btn",style:{background:"#d68910",color:"#fff",width:"100%"},onClick:agregarCobro},"Agregar")
     ),
     cobrarHecho.length>0 && e("div",{style:{marginTop:4}},
