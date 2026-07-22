@@ -253,12 +253,14 @@ function buildTools() {
         if (ctx.otroNum) await avisar(ctx.otroNum, `📝 ${ctx.autor} anotó una tarea:\n• ${texto}${para ? ` (para ${para})` : ""}`);
         return `📝 Anotado: ${texto}${para ? ` (para ${para})` : ""}`;
       } },
-    { name: "listar_tareas", description: "Lista las tareas pendientes (no hechas). 'qué hay pendiente', 'tareas'. incluir_hechas=true para ver también las completadas recientes.",
-      input_schema: { type: "object", properties: { incluir_hechas: { type: "boolean" } } },
+    { name: "listar_tareas", description: "Lista las tareas pendientes. 'qué hay pendiente', 'tareas'. Para 'mis tareas / las que me tocan', pasá para=<nombre de quien te habla> (incluye las 'para ambos'). incluir_hechas=true para ver también las completadas recientes.",
+      input_schema: { type: "object", properties: { para: { type: ["string", "null"], description: "filtra por destinatario e incluye las 'para ambos'; para 'mis tareas' usá el nombre de quien te habla" }, incluir_hechas: { type: "boolean" } } },
       run: async (c, _ctx) => {
         const rows = await sbGet("tareas", "select=*&order=hecha.asc,creado_en.desc");
-        const pend = rows.filter(t => !t.hecha).map(t => ({ texto: t.texto, para: t.para || "ambos", autor: t.autor }));
-        const hechas = c.incluir_hechas ? rows.filter(t => t.hecha).slice(0, 10).map(t => ({ texto: t.texto })) : undefined;
+        const filtro = matchSocio(c.para);
+        const esDe = t => !filtro || t.para == null || t.para === filtro; // null = para ambos → siempre entra
+        const pend = rows.filter(t => !t.hecha && esDe(t)).map(t => ({ texto: t.texto, para: t.para || "ambos", autor: t.autor }));
+        const hechas = c.incluir_hechas ? rows.filter(t => t.hecha && esDe(t)).slice(0, 10).map(t => ({ texto: t.texto })) : undefined;
         return JSON.stringify({ pendientes: pend, hechas });
       } },
     { name: "completar_tarea", description: "Marca una tarea pendiente como HECHA: 'listo lo de X', 'ya hice X', 'completá X'. Matcheá por texto con las pendientes.",
@@ -285,7 +287,7 @@ function sysPrompt(ctx) {
 Podés hacer TRES cosas, según lo que diga el mensaje:
 1) REGISTRAR lo que ${ctx.autor} informa (un movimiento, una cuenta por cobrar, o marcar algo como cobrado) → usá las tools registrar_movimiento / registrar_cobrar / marcar_cobrado.
 2) RESPONDER consultas sobre la caja → usá las tools de lectura (saldos, totales_periodo, listar_movimientos, a_cobrar, retiros).
-3) TAREAS/PENDIENTES compartidos (Fran/Santi): anotar (anotar_tarea), listar (listar_tareas) o marcar hechas (completar_tarea). "anotá / recordá / pendiente" → anotar_tarea; "qué hay pendiente / tareas" → listar_tareas; "listo / ya hice X" → completar_tarea.
+3) TAREAS/PENDIENTES compartidos (Fran/Santi): anotar (anotar_tarea), listar (listar_tareas) o marcar hechas (completar_tarea). "anotá / recordá / pendiente" → anotar_tarea; "qué hay pendiente / tareas" → listar_tareas; "mis tareas / las que me tocan" → listar_tareas con para=${ctx.autor}; "listo / ya hice X" → completar_tarea. Cada tarea puede ser para un socio o para los dos (para=null).
 
 Reglas:
 - Usá SIEMPRE una tool para cualquier número o dato de la caja; nunca inventes ni estimes de memoria.

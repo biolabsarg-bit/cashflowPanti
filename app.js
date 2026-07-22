@@ -116,6 +116,7 @@ function App() {
   const [cobrar, setCobrar] = useState([]);
   const [tareas, setTareas] = useState([]);
   const [nuevaTarea, setNuevaTarea] = useState({texto:"",para:""});
+  const [filtroTarea, setFiltroTarea] = useState("todas");
   const [syncing, setSyncing] = useState(true);
   const [view, setView] = useState("inicio");
   const [dolar, setDolar] = useState(null);
@@ -789,6 +790,10 @@ function App() {
     )
   );
 
+  const misPend = tareasPend.filter(t=>!t.para||t.para===usuario);
+  const misHechas = tareasHechas.filter(t=>!t.para||t.para===usuario);
+  const pendVista = filtroTarea==="mias" ? misPend : tareasPend;
+  const hechasVista = filtroTarea==="mias" ? misHechas : tareasHechas;
   const Tareas = e("div",{style:{flex:1,overflowY:"auto",padding:"14px 16px",display:"flex",flexDirection:"column",gap:12}},
     e("div",{className:"card",style:{display:"flex",flexDirection:"column",gap:8}},
       e("p",{style:{margin:0,fontSize:13,fontWeight:600,color:T.text}},"➕ Nueva tarea"),
@@ -799,9 +804,13 @@ function App() {
       ),
       e("button",{className:"btn",style:{background:"#e67e22",color:"#fff"},onClick:agregarTarea},"Anotar")
     ),
-    e("p",{style:{margin:"4px 0 -4px",fontSize:13,fontWeight:600,color:T.text}},`Pendientes (${tareasPend.length})`),
-    tareasPend.length===0 && e("p",{style:{color:T.text2,fontSize:14,textAlign:"center",padding:"16px 0"}}, syncing?"Cargando...":"Nada pendiente 🎉"),
-    tareasPend.map(t=>
+    e("div",{style:{display:"flex",gap:6}},
+      [["todas","Todas"],["mias","Mías"]].map(([k,l])=>{ const sel=filtroTarea===k;
+        return e("button",{key:k,className:"seg",onClick:()=>setFiltroTarea(k),style:{flex:1,borderRadius:10,background:sel?"#e67e22":T.inputBg,color:sel?"#fff":T.text2}}, l); })
+    ),
+    e("p",{style:{margin:"4px 0 -4px",fontSize:13,fontWeight:600,color:T.text}},`Pendientes (${pendVista.length})`),
+    pendVista.length===0 && e("p",{style:{color:T.text2,fontSize:14,textAlign:"center",padding:"16px 0"}}, syncing?"Cargando...":(filtroTarea==="mias"?"Nada tuyo pendiente 🎉":"Nada pendiente 🎉")),
+    pendVista.map(t=>
       e("div",{key:t.id,className:"card",style:{display:"flex",alignItems:"center",gap:10}},
         e("button",{className:"icon-btn",onClick:()=>completarTarea(t),title:"Marcar hecha",style:{fontSize:20}},"⬜"),
         e("div",{style:{flex:1,minWidth:0}},
@@ -811,8 +820,8 @@ function App() {
         e("button",{className:"icon-btn",onClick:()=>borrarTarea(t.id),title:"Borrar"},"🗑️")
       )
     ),
-    tareasHechas.length>0 && e("p",{style:{margin:"8px 0 -4px",fontSize:13,fontWeight:600,color:T.text2}},"Hechas"),
-    tareasHechas.slice(0,10).map(t=>
+    hechasVista.length>0 && e("p",{style:{margin:"8px 0 -4px",fontSize:13,fontWeight:600,color:T.text2}},"Hechas"),
+    hechasVista.slice(0,10).map(t=>
       e("div",{key:t.id,className:"card",style:{display:"flex",alignItems:"center",gap:10,opacity:.6}},
         e("button",{className:"icon-btn",onClick:()=>reabrirTarea(t),title:"Reabrir",style:{fontSize:20}},"✅"),
         e("div",{style:{flex:1,minWidth:0}},
