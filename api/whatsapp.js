@@ -136,6 +136,13 @@ export function armarMovimiento(c, ctx) {
   };
 }
 
+// Matchea un nombre suelto contra la lista de socios; null si no matchea.
+function matchSocio(q) {
+  if (!q) return null;
+  const n = String(q).toLowerCase();
+  return [...new Set(Object.values(SOCIOS))].find(s => s.toLowerCase() === n || s.toLowerCase().includes(n) || n.includes(s.toLowerCase())) || null;
+}
+
 // ---- Tools (lectura + escritura) ----
 function buildTools() {
   return [
@@ -234,6 +241,37 @@ function buildTools() {
         if (ctx.otroNum) await avisar(ctx.otroNum, `📥 ${ctx.autor} marcó como cobrado:\n${match.quien}: ${fmt(match.monto)}${caja ? ` → ${caja.nombre}` : ""}`);
         return `✅ Cobrado: ${match.quien} (${fmt(match.monto)}).${ingTxt}${caja ? "" : "\n(No registré ingreso porque no indicaste la caja.)"}`;
       } },
+
+    { name: "anotar_tarea", description: "Anota una tarea/pendiente compartida (Fran/Santi): 'anotá X', 'recordá que hay que X', 'pendiente: X'. 'para' opcional: nombre del socio si es para uno solo; si es de los dos, null.",
+      input_schema: { type: "object", properties: { texto: { type: "string" }, para: { type: ["string", "null"] } }, required: ["texto"] },
+      run: async (c, ctx) => {
+        const texto = String(c.texto || "").trim();
+        if (!texto) return "⚠️ ¿Qué anoto?";
+        const para = matchSocio(c.para);
+        const ok = await sbInsert("tareas", { id: Date.now(), texto, hecha: false, para, autor: ctx.autor, creado_en: new Date().toISOString() });
+        if (!ok) return "⚠️ No se pudo anotar la tarea.";
+        if (ctx.otroNum) await avisar(ctx.otroNum, `📝 ${ctx.autor} anotó una tarea:\n• ${texto}${para ? ` (para ${para})` : ""}`);
+        return `📝 Anotado: ${texto}${para ? ` (para ${para})` : ""}`;
+      } },
+    { name: "listar_tareas", description: "Lista las tareas pendientes (no hechas). 'qué hay pendiente', 'tareas'. incluir_hechas=true para ver también las completadas recientes.",
+      input_schema: { type: "object", properties: { incluir_hechas: { type: "boolean" } } },
+      run: async (c, _ctx) => {
+        const rows = await sbGet("tareas", "select=*&order=hecha.asc,creado_en.desc");
+        const pend = rows.filter(t => !t.hecha).map(t => ({ texto: t.texto, para: t.para || "ambos", autor: t.autor }));
+        const hechas = c.incluir_hechas ? rows.filter(t => t.hecha).slice(0, 10).map(t => ({ texto: t.texto })) : undefined;
+        return JSON.stringify({ pendientes: pend, hechas });
+      } },
+    { name: "completar_tarea", description: "Marca una tarea pendiente como HECHA: 'listo lo de X', 'ya hice X', 'completá X'. Matcheá por texto con las pendientes.",
+      input_schema: { type: "object", properties: { texto: { type: "string" } }, required: ["texto"] },
+      run: async (c, ctx) => {
+        const pend = await sbGet("tareas", "select=*&hecha=eq.false");
+        const q = String(c.texto || "").toLowerCase();
+        const match = pend.find(t => t.texto.toLowerCase().includes(q) || q.includes(t.texto.toLowerCase()));
+        if (!match) return `⚠️ No encontré una tarea pendiente que matchee "${c.texto}". Pendientes: ${pend.map(t => t.texto).join("; ") || "ninguna"}.`;
+        await sbPatch("tareas", match.id, { hecha: true, hecha_en: new Date().toISOString() });
+        if (ctx.otroNum) await avisar(ctx.otroNum, `✅ ${ctx.autor} completó:\n• ${match.texto}`);
+        return `✅ Listo: ${match.texto}`;
+      } },
   ];
 }
 
@@ -244,9 +282,10 @@ function sysPrompt(ctx) {
   const socios = [...new Set(Object.values(SOCIOS))].join(", ");
   return `Sos el asistente de Cashflow de la empresa (pesos argentinos), que usan los socios ${socios}. Hablás con ${ctx.autor}. HOY es ${HOY()} (hora Argentina).
 
-Podés hacer DOS cosas, según lo que diga el mensaje:
+Podés hacer TRES cosas, según lo que diga el mensaje:
 1) REGISTRAR lo que ${ctx.autor} informa (un movimiento, una cuenta por cobrar, o marcar algo como cobrado) → usá las tools registrar_movimiento / registrar_cobrar / marcar_cobrado.
 2) RESPONDER consultas sobre la caja → usá las tools de lectura (saldos, totales_periodo, listar_movimientos, a_cobrar, retiros).
+3) TAREAS/PENDIENTES compartidos (Fran/Santi): anotar (anotar_tarea), listar (listar_tareas) o marcar hechas (completar_tarea). "anotá / recordá / pendiente" → anotar_tarea; "qué hay pendiente / tareas" → listar_tareas; "listo / ya hice X" → completar_tarea.
 
 Reglas:
 - Usá SIEMPRE una tool para cualquier número o dato de la caja; nunca inventes ni estimes de memoria.

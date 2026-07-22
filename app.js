@@ -114,6 +114,8 @@ function App() {
   const [movs, setMovs] = useState([]);
   const [fijos, setFijos] = useState([]);
   const [cobrar, setCobrar] = useState([]);
+  const [tareas, setTareas] = useState([]);
+  const [nuevaTarea, setNuevaTarea] = useState({texto:"",para:""});
   const [syncing, setSyncing] = useState(true);
   const [view, setView] = useState("inicio");
   const [dolar, setDolar] = useState(null);
@@ -155,14 +157,15 @@ function App() {
 
   const cargar = useCallback(async()=>{
     try {
-      const [c, ca, m, f, co] = await Promise.all([
+      const [c, ca, m, f, co, ta] = await Promise.all([
         sbGet("cajas","select=*&order=orden.asc,id.asc"),
         sbGet("categorias","select=*&order=id.asc"),
         sbGet("movimientos","select=*&order=fecha.desc,creado_en.desc"),
         sbGet("fijos","select=*&order=id.asc"),
         sbGet("cobrar","select=*&order=fecha.desc,creado_en.desc"),
+        sbGet("tareas","select=*&order=hecha.asc,creado_en.desc"),
       ]);
-      setCajas(c); setCats(ca); setMovs(m); setFijos(f); setCobrar(co);
+      setCajas(c); setCats(ca); setMovs(m); setFijos(f); setCobrar(co); setTareas(ta);
     } catch {}
     setSyncing(false);
   },[]);
@@ -188,6 +191,9 @@ function App() {
   const blueVenta = dolar ? Number(dolar.venta) : null;
   let patrimonio=0, hayUSDsinDolar=false;
   cajas.forEach(c=>{ const s=saldoCaja(c.id); if(c.moneda==="USD"){ if(blueVenta) patrimonio+=s*blueVenta; else hayUSDsinDolar=true; } else patrimonio+=s; });
+
+  const tareasPend = tareas.filter(t=>!t.hecha);
+  const tareasHechas = tareas.filter(t=>t.hecha);
 
   async function guardarMov(){
     const m=parseFloat(monto); if(!m||m<=0||!cajaId) return;
@@ -241,6 +247,14 @@ function App() {
     try { const g=await sbPost("cobrar",obj); setCobrar(prev=>[g,...prev]); setNuevoCobro({quien:"",monto:"",descripcion:"",fecha:today(),fechaLiq:"",cajaLiq:"",auto:false}); } catch {}
   }
   async function borrarCobro(id){ setCobrar(prev=>prev.filter(x=>x.id!==id)); setConfirmCobroDel(null); try{ await sbDel("cobrar",id); }catch{} }
+  async function agregarTarea(){
+    const texto=nuevaTarea.texto.trim(); if(!texto) return;
+    const obj={ id:Date.now(), texto, hecha:false, para:nuevaTarea.para||null, autor:usuario, creado_en:new Date().toISOString() };
+    try { const g=await sbPost("tareas",obj); setTareas(prev=>[g,...prev]); setNuevaTarea({texto:"",para:""}); } catch {}
+  }
+  async function completarTarea(t){ const he=new Date().toISOString(); setTareas(prev=>prev.map(x=>x.id===t.id?{...x,hecha:true,hecha_en:he}:x)); try{ await sbPatch("tareas",t.id,{hecha:true,hecha_en:he}); }catch{} }
+  async function reabrirTarea(t){ setTareas(prev=>prev.map(x=>x.id===t.id?{...x,hecha:false,hecha_en:null}:x)); try{ await sbPatch("tareas",t.id,{hecha:false,hecha_en:null}); }catch{} }
+  async function borrarTarea(id){ setTareas(prev=>prev.filter(x=>x.id!==id)); try{ await sbDel("tareas",id); }catch{} }
   async function cobrarItem(x, cajaIdSel){
     if(cajaIdSel){
       const obj={ id:Date.now(), tipo:"ingreso", monto:Number(x.monto), caja_id:Number(cajaIdSel), caja_destino_id:null, categoria_id:null, descripcion:`Cobro: ${x.quien}${x.descripcion?" - "+x.descripcion:""}`, fecha:today(), autor:usuario, es_retiro:false, creado_en:new Date().toISOString() };
@@ -459,7 +473,7 @@ function App() {
       )
     ),
     e("div",{style:{display:"flex",overflowX:"auto"}},
-      [["inicio","🏠 Inicio","#27ae60"],["nuevo","➕ Cargar","#2980b9"],["movimientos","📋 Movim.","#8e44ad"],["cobrar","💰 Cobrar","#d68910"],["retiros","↩️ Retiros","#16a085"],["fijos","🔁 Fijos","#c0392b"],["analisis","📊 Análisis","#2c3e50"],["config","⚙️ Config","#7f8c8d"]].map(([k,l,c])=>
+      [["inicio","🏠 Inicio","#27ae60"],["nuevo","➕ Cargar","#2980b9"],["movimientos","📋 Movim.","#8e44ad"],["cobrar","💰 Cobrar","#d68910"],["retiros","↩️ Retiros","#16a085"],["tareas","📝 Tareas","#e67e22"],["fijos","🔁 Fijos","#c0392b"],["analisis","📊 Análisis","#2c3e50"],["config","⚙️ Config","#7f8c8d"]].map(([k,l,c])=>
         e("button",{key:k,className:"tab",style:{borderBottomColor:view===k?c:"transparent",color:view===k?c:T.text2,fontWeight:view===k?700:400},onClick:()=>setView(k)},l)
       )
     )
@@ -491,6 +505,10 @@ function App() {
         ...USUARIOS.map(u=>e("p",{key:u,style:{margin:"3px 0 0",fontSize:11.5,color:T.text,display:"flex",justifyContent:"space-between"}}, e("span",null,u), e("span",{style:{fontWeight:600}},fmt(retiros[u]||0)))),
         difRet>0 && e("p",{style:{margin:"4px 0 0",fontSize:10,color:"#16a085",fontWeight:600}},`${aFavor} +${fmt(difRet)} a favor`)
       )
+    ),
+    tareasPend.length>0 && e("div",{className:"card",style:{cursor:"pointer",borderLeft:"3px solid #e67e22",display:"flex",justifyContent:"space-between",alignItems:"center"},onClick:()=>setView("tareas")},
+      e("span",{style:{fontSize:12,color:T.text2}},"📝 Pendientes"),
+      e("span",{style:{fontSize:14,fontWeight:600,color:"#e67e22"}},`${tareasPend.length} tarea${tareasPend.length!==1?"s":""}`)
     ),
     e("p",{style:{margin:"4px 0 -4px",fontSize:13,fontWeight:600,color:T.text}},"Cajas"),
     cajas.length===0 && e("p",{style:{color:T.text2,fontSize:14,textAlign:"center",padding:"20px 0"}},syncing?"Cargando...":"Creá tu primera caja en ⚙️ Config"),
@@ -771,6 +789,41 @@ function App() {
     )
   );
 
+  const Tareas = e("div",{style:{flex:1,overflowY:"auto",padding:"14px 16px",display:"flex",flexDirection:"column",gap:12}},
+    e("div",{className:"card",style:{display:"flex",flexDirection:"column",gap:8}},
+      e("p",{style:{margin:0,fontSize:13,fontWeight:600,color:T.text}},"➕ Nueva tarea"),
+      e("input",{className:"inp",placeholder:"Ej: comprar sobres",value:nuevaTarea.texto,onChange:ev=>setNuevaTarea({...nuevaTarea,texto:ev.target.value}),onKeyDown:ev=>{if(ev.key==="Enter")agregarTarea();}}),
+      e("div",{style:{display:"flex",gap:6}},
+        ["","Fran","Santi"].map(u=>{ const sel=nuevaTarea.para===u;
+          return e("button",{key:u||"ambos",className:"seg",onClick:()=>setNuevaTarea({...nuevaTarea,para:u}),style:{flex:1,borderRadius:10,background:sel?"#e67e22":T.inputBg,color:sel?"#fff":T.text2}}, u||"Ambos"); })
+      ),
+      e("button",{className:"btn",style:{background:"#e67e22",color:"#fff"},onClick:agregarTarea},"Anotar")
+    ),
+    e("p",{style:{margin:"4px 0 -4px",fontSize:13,fontWeight:600,color:T.text}},`Pendientes (${tareasPend.length})`),
+    tareasPend.length===0 && e("p",{style:{color:T.text2,fontSize:14,textAlign:"center",padding:"16px 0"}}, syncing?"Cargando...":"Nada pendiente 🎉"),
+    tareasPend.map(t=>
+      e("div",{key:t.id,className:"card",style:{display:"flex",alignItems:"center",gap:10}},
+        e("button",{className:"icon-btn",onClick:()=>completarTarea(t),title:"Marcar hecha",style:{fontSize:20}},"⬜"),
+        e("div",{style:{flex:1,minWidth:0}},
+          e("p",{style:{margin:0,fontSize:14,color:T.text,wordBreak:"break-word"}},t.texto),
+          e("p",{style:{margin:"2px 0 0",fontSize:10.5,color:T.text2}}, `${t.para?`para ${t.para}`:"para los dos"} · anotó ${t.autor||"?"}`)
+        ),
+        e("button",{className:"icon-btn",onClick:()=>borrarTarea(t.id),title:"Borrar"},"🗑️")
+      )
+    ),
+    tareasHechas.length>0 && e("p",{style:{margin:"8px 0 -4px",fontSize:13,fontWeight:600,color:T.text2}},"Hechas"),
+    tareasHechas.slice(0,10).map(t=>
+      e("div",{key:t.id,className:"card",style:{display:"flex",alignItems:"center",gap:10,opacity:.6}},
+        e("button",{className:"icon-btn",onClick:()=>reabrirTarea(t),title:"Reabrir",style:{fontSize:20}},"✅"),
+        e("div",{style:{flex:1,minWidth:0}},
+          e("p",{style:{margin:0,fontSize:14,color:T.text,textDecoration:"line-through",wordBreak:"break-word"}},t.texto),
+          t.hecha_en && e("p",{style:{margin:"2px 0 0",fontSize:10.5,color:T.text2}}, `hecha ${dispDT(t.hecha_en)}`)
+        ),
+        e("button",{className:"icon-btn",onClick:()=>borrarTarea(t.id),title:"Borrar"},"🗑️")
+      )
+    )
+  );
+
   return e("div",{style:{fontFamily:"system-ui,sans-serif",maxWidth:480,margin:"0 auto",display:"flex",flexDirection:"column",height:"100dvh",background:T.bg}},
     e("style",null,css),
     Modal,
@@ -780,6 +833,7 @@ function App() {
     view==="movimientos" && Movimientos,
     view==="cobrar" && Cobrar,
     view==="retiros" && Retiros,
+    view==="tareas" && Tareas,
     view==="fijos" && Fijos,
     view==="analisis" && Analisis,
     view==="config" && Config
