@@ -284,6 +284,8 @@ function sysPrompt(ctx) {
   const socios = [...new Set(Object.values(SOCIOS))].join(", ");
   return `Sos el asistente de Cashflow de la empresa (pesos argentinos), que usan los socios ${socios}. Hablás con ${ctx.autor}. HOY es ${HOY()} (hora Argentina).
 
+Tenés el historial reciente de esta conversación (si hay). Usalo para entender referencias como "esa", "la de recién", "sí, dale", "el segundo", y para COMPLETAR una acción que quedó pendiente de un mensaje anterior (ej. si vos pediste una aclaración y ahora te la dan). No repreguntes algo que ya está en el historial.
+
 Podés hacer TRES cosas, según lo que diga el mensaje:
 1) REGISTRAR lo que ${ctx.autor} informa (un movimiento, una cuenta por cobrar, o marcar algo como cobrado) → usá las tools registrar_movimiento / registrar_cobrar / marcar_cobrado.
 2) RESPONDER consultas sobre la caja → usá las tools de lectura (saldos, totales_periodo, listar_movimientos, a_cobrar, retiros).
@@ -293,7 +295,7 @@ Reglas:
 - Usá SIEMPRE una tool para cualquier número o dato de la caja; nunca inventes ni estimes de memoria.
 - Cuando "esta semana / este mes / ayer", calculá las fechas desde HOY.
 - MOVIMIENTOS/plata: registrá solo lo explícito; si falta el monto o la caja, preguntá (nunca inventes números). No registres una consulta como movimiento.
-- TAREAS: alcanza con el TEXTO. Si el mensaje pide anotar/registrar/recordar un pendiente, tomá como texto lo que lo describe —AUNQUE suene genérico o "meta" (ej. "registrar tareas pendientes", "anotar tareas" son textos válidos)— y anotá directo, SIN preguntar. Solo pedí aclaración si NO hay ningún texto (ej. solo "anotá una tarea"). Ojo: el bot no recuerda mensajes anteriores, así que si preguntás no vas a poder usar la respuesta — mejor anotá lo que haya.
+- TAREAS: alcanza con el TEXTO. Si el mensaje pide anotar/registrar/recordar un pendiente, tomá como texto lo que lo describe —AUNQUE suene genérico o "meta" (ej. "registrar tareas pendientes", "anotar tareas" son textos válidos)— y anotá directo, SIN preguntar. Solo pedí aclaración si NO hay ningún texto (ej. solo "anotá una tarea"); y si en el mensaje siguiente te dan el texto, completá la tarea usando el historial.
 - Después de registrar, confirmá con el resultado de la tool. Para consultas, respondé en español, directo y conciso, montos en $ ARS con separador de miles.
 - Es WhatsApp: texto plano, SIN tablas ni markdown (nada de "|" ni "**"). Para resaltar usá *un asterisco simple*. Listas con • y una línea por ítem. Respuestas breves (es la pantalla de un teléfono).
 - Elegí la mínima cantidad de tools necesaria (casi siempre 1).
@@ -314,11 +316,14 @@ async function callClaude(system, tools, messages) {
 
 // Loop de tool-use a mano: llama al modelo, ejecuta las tools que pida, repite hasta que
 // devuelva texto final (o se agoten las iteraciones → una última pasada sin tools).
-export async function agente(texto, ctx) {
+export async function agente(texto, ctx, history = []) {
   const tools = buildTools();
   const defs = tools.map(({ name, description, input_schema }) => ({ name, description, input_schema }));
   const system = sysPrompt(ctx);
-  const messages = [{ role: "user", content: texto }];
+  // Historial reciente (turnos de texto user/assistant). La API exige arrancar en 'user'.
+  const prev = history.filter(m => m && (m.role === "user" || m.role === "assistant") && m.content);
+  while (prev.length && prev[0].role !== "user") prev.shift();
+  const messages = [...prev, { role: "user", content: texto }];
   for (let i = 0; i < 4; i++) {
     const data = await callClaude(system, defs, messages);
     const content = data.content || [];
@@ -358,7 +363,26 @@ export default async function handler(req, res) {
     let _movs = null;
     const getMovs = async () => { if (!_movs) _movs = await sbGet("movimientos", "select=*"); return _movs; };
     const ctx = { autor, otroNum, cajas, cats, cobrarPend, getMovs };
-    const reply = await agente(texto, ctx);
+
+    // Memoria de conversación: últimos turnos de ESTE socio dentro de una ventana de 2h.
+    let history = [];
+    try {
+      const corte = new Date(Date.now() - 2 * 60 * 60 * 1000).toISOString();
+      const rows = await sbGet("chat_historial", `select=role,content&socio=eq.${encodeURIComponent(fromRaw)}&creado_en=gte.${corte}&order=id.desc&limit=12`);
+      history = rows.reverse();
+    } catch {}
+
+    const reply = await agente(texto, ctx, history);
+
+    // Guardar el turno (user+assistant en un solo insert → el par queda íntegro). Best-effort.
+    try {
+      const now = Date.now();
+      await sbInsert("chat_historial", [
+        { id: now, socio: fromRaw, role: "user", content: texto, creado_en: new Date().toISOString() },
+        { id: now + 1, socio: fromRaw, role: "assistant", content: reply, creado_en: new Date().toISOString() },
+      ]);
+    } catch {}
+
     return res.status(200).send(twiml(reply || "No pude procesar el mensaje."));
   } catch (err) {
     return res.status(200).send(twiml("⚠️ Hubo un error procesando el mensaje."));
