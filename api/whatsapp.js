@@ -242,7 +242,7 @@ function buildTools() {
         return `✅ Cobrado: ${match.quien} (${fmt(match.monto)}).${ingTxt}${caja ? "" : "\n(No registré ingreso porque no indicaste la caja.)"}`;
       } },
 
-    { name: "anotar_tarea", description: "Anota una tarea/pendiente compartida (Fran/Santi): 'anotá X', 'recordá que hay que X', 'pendiente: X'. 'para' opcional: nombre del socio si es para uno solo; si es de los dos, null.",
+    { name: "anotar_tarea", description: "Anota una tarea/pendiente compartida (Fran/Santi): 'anotá X', 'recordá que hay que X', 'pendiente: X'. Tomá como 'texto' lo que describe el pendiente aunque esté fraseado raro o suene genérico (ej. 'registrar tareas pendientes', 'anotar tareas'); NO pidas confirmación si hay cualquier texto plausible. 'para' opcional: nombre del socio si es para uno solo; si es de los dos, null.",
       input_schema: { type: "object", properties: { texto: { type: "string" }, para: { type: ["string", "null"] } }, required: ["texto"] },
       run: async (c, ctx) => {
         const texto = String(c.texto || "").trim();
@@ -292,7 +292,8 @@ Podés hacer TRES cosas, según lo que diga el mensaje:
 Reglas:
 - Usá SIEMPRE una tool para cualquier número o dato de la caja; nunca inventes ni estimes de memoria.
 - Cuando "esta semana / este mes / ayer", calculá las fechas desde HOY.
-- Registrá SOLO lo que el mensaje afirma explícitamente; si falta un dato clave (monto, caja), preguntá en vez de asumir. No registres una consulta.
+- MOVIMIENTOS/plata: registrá solo lo explícito; si falta el monto o la caja, preguntá (nunca inventes números). No registres una consulta como movimiento.
+- TAREAS: alcanza con el TEXTO. Si el mensaje pide anotar/registrar/recordar un pendiente, tomá como texto lo que lo describe —AUNQUE suene genérico o "meta" (ej. "registrar tareas pendientes", "anotar tareas" son textos válidos)— y anotá directo, SIN preguntar. Solo pedí aclaración si NO hay ningún texto (ej. solo "anotá una tarea"). Ojo: el bot no recuerda mensajes anteriores, así que si preguntás no vas a poder usar la respuesta — mejor anotá lo que haya.
 - Después de registrar, confirmá con el resultado de la tool. Para consultas, respondé en español, directo y conciso, montos en $ ARS con separador de miles.
 - Es WhatsApp: texto plano, SIN tablas ni markdown (nada de "|" ni "**"). Para resaltar usá *un asterisco simple*. Listas con • y una línea por ítem. Respuestas breves (es la pantalla de un teléfono).
 - Elegí la mínima cantidad de tools necesaria (casi siempre 1).
